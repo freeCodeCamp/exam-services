@@ -1,0 +1,3 @@
+[workspace]
+members = ["moderation-service", "screenshot-service", "prisma"]
+resolver = "3"

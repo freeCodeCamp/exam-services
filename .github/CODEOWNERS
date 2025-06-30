@@ -15,8 +15,8 @@
 
 # --- Owned by none (negate rule above) ---
 
-package.json
-package-lock.json
+Cargo.toml
+Cargo.lock
 
 # -------------------------------------------------
 # All files in the root are owned by dev team
@@ -26,5 +26,5 @@ package-lock.json
 
 # --- Owned by none (negate rule above) ---
 
-/package.json
-/package-lock.json
+/Cargo.toml
+/Cargo.lock

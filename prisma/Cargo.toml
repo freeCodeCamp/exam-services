@@ -1,0 +1,10 @@
+[package]
+name = "prisma"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bson = "2.15.0"
+chrono = { version = "0.4.41", features = ["serde"] }
+prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "0.5.0" }
+serde = "1.0.219"

@@ -16,7 +16,21 @@ pub struct EnvVars {
 
 impl EnvVars {
     pub fn new() -> Self {
-        let bucket_name = std::env::var("S3_BUCKET_NAME").unwrap();
+        let default_bucket_name = "EXAM_ENVIRONMENT_SCREENSHOTS".to_string();
+        let bucket_name = match std::env::var("S3_BUCKET_NAME") {
+            Ok(s) => {
+                if s.is_empty() {
+                    warn!("S3_BUCKET_NAME not set. Defaulting to {default_bucket_name}");
+                    default_bucket_name
+                } else {
+                    s
+                }
+            }
+            Err(_e) => {
+                warn!("S3_BUCKET_NAME not set. Defaulting to {default_bucket_name}");
+                default_bucket_name
+            }
+        };
 
         let port = match std::env::var("PORT") {
             Ok(port_string) => port_string.parse().expect("PORT to be parseable as u16"),

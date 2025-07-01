@@ -38,7 +38,7 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 
 #[tracing::instrument]
 pub async fn update_moderation_collection() -> anyhow::Result<()> {
-    let mongo_uri = std::env::var("MONGOHQ_URL")?;
+    let mongo_uri = std::env::var("MONGODB_URI")?;
     let client = client(&mongo_uri).await?;
 
     let moderation_collection =

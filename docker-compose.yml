@@ -1,0 +1,31 @@
+services:
+  moderation:
+    container_name: moderation-service
+    restart: unless-stopped
+    env_file: ./moderation-service/.env
+    ports:
+      - "3001:3001"
+    logging:
+      driver: "local"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    build:
+      context: ./moderation-service
+      dockerfile: Dockerfile
+  screenshot:
+    container_name: screenshot-service
+    restart: unless-stopped
+    env_file: ./screenshot-service/.env
+    ports:
+      - "3002:3002"
+    logging:
+      driver: "local"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    build:
+      context: ./screenshot-service
+      dockerfile: Dockerfile

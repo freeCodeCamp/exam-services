@@ -1,32 +1,28 @@
 # Exam Services
 
-## Development
-
-To run:
-
 ```bash
-cargo run
+cd moderation-service && cp sample.env .env
+cd screenshot-service && cp sample.env .env
 ```
 
-## Deployment
-
-Build the Docker image:
-
 ```bash
-docker build -t exam-moderation-service -f ./docker/exam-moderation-service/Dockerfile .
+docker compose up -d
 ```
 
-Run the Docker container:
+## Moderation Service
+
+### Development
 
 ```bash
-docker run -d exam-moderation-service
+docker compose up -d moderation
 ```
 
-## Testing
+### Testing
 
 Seed database with exam and attempt
 
 ```bash
+cd freeCodeCamp/freeCodeCampm
 pnpm run seed:exam-env --attempt
 ```
 
@@ -34,6 +30,14 @@ A specific version of `rustc` is used, because the test tooling requires nightly
 
 ```bash
 cargo +nightly-2025-04-03 test
+```
+
+## Screenshot Service
+
+### Development
+
+```bash
+docker compose up -d screenshot
 ```
 
 ## Design Philosophy

@@ -5,14 +5,13 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().pretty())
         .with(sentry::integrations::tracing::layer())
         .with(EnvFilter::from_default_env())
-        // Log to stdout
-        // .with(tracing_subscriber::fmt::layer().pretty())
         .init();
     tracing::info!("Starting exam moderation service...");
     dotenvy::dotenv().ok();
+
     let sentry_dsn = std::env::var("SENTRY_DSN").unwrap_or_default();
     let _guard = if valid_sentry_dsn(&sentry_dsn) {
         tracing::info!("initializing Sentry");
@@ -54,7 +53,7 @@ mod tests {
     /// Check if all records in the `EnvExam` collection are deserializable
     #[tokio::test]
     async fn exam_schema_is_unchanged() {
-        let mongo_uri = std::env::var("MONGOHQ_URL").unwrap();
+        let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let exam_collection = db::get_collection::<EnvExam>(&client, "EnvExam").await;
         let _exams: Vec<EnvExam> = exam_collection
@@ -69,7 +68,7 @@ mod tests {
     /// Check if all records in the `EnvExamAttempt` collection are deserializable
     #[tokio::test]
     async fn attempt_schema_is_unchanged() {
-        let mongo_uri = std::env::var("MONGOHQ_URL").unwrap();
+        let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let attempt_collection =
             db::get_collection::<EnvExamAttempt>(&client, "EnvExamAttempt").await;
@@ -85,7 +84,7 @@ mod tests {
     /// Check if all records in the `ExamModeration` collection are deserializable
     #[tokio::test]
     async fn moderation_schema_is_unchanged() {
-        let mongo_uri = std::env::var("MONGOHQ_URL").unwrap();
+        let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let moderation_collection =
             db::get_collection::<ExamModeration>(&client, "ExamModeration").await;

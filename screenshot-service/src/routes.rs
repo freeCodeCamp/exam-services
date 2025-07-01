@@ -1,5 +1,6 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::{config::AppState, s3};
 
@@ -27,5 +28,6 @@ pub async fn post_upload(
 }
 
 pub async fn get_status_ping() -> impl IntoResponse {
+    info!("Status");
     StatusCode::OK
 }

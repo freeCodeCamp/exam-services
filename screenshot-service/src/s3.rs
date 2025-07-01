@@ -15,6 +15,7 @@ pub async fn upload_to_s3(
         .put_object()
         .bucket(bucket_name)
         .key(key)
+        .content_type("image/jpeg")
         .body(image.into_bytes().into())
         .send()
         .await;

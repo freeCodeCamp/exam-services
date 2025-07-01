@@ -1,40 +1,23 @@
+use std::time::Duration;
+
 use aws_config::BehaviorVersion;
 use axum::{
-    Json, Router,
-    extract::State,
-    response::IntoResponse,
-    routing::{get, put},
+    Router,
+    routing::{get, post},
 };
-use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tokio::signal;
+use tower_http::{
+    LatencyUnit,
+    limit::RequestBodyLimitLayer,
+    timeout::TimeoutLayer,
+    trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer},
+};
+use tracing::{Level, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Debug, Clone)]
-struct AppState {
-    client: aws_sdk_s3::Client,
-    env_vars: EnvVars,
-}
-
-#[derive(Debug, Clone)]
-struct EnvVars {
-    bucket_name: String,
-    port: u16,
-}
-
-impl EnvVars {
-    pub fn new() -> Self {
-        let bucket_name = std::env::var("S3_BUCKET_NAME").unwrap();
-        let port = match std::env::var("PORT") {
-            Ok(port_string) => port_string.parse().expect("PORT to be parseable as u16"),
-            Err(_e) => {
-                let default_port = 3002;
-                warn!("PORT not set. Defaulting to {default_port}");
-                default_port
-            }
-        };
-        EnvVars { bucket_name, port }
-    }
-}
+mod config;
+mod routes;
+mod s3;
 
 #[tokio::main]
 async fn main() {
@@ -52,101 +35,63 @@ async fn main() {
     // TODO: Consider using a specific version
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let client = aws_sdk_s3::Client::new(&config);
-    let env_vars = EnvVars::new();
+
+    let env_vars = config::EnvVars::new();
     let port = env_vars.port;
-    let app_state = AppState { client, env_vars };
+    let request_timeout_in_ms = env_vars.request_timeout_in_ms;
+    let request_body_size_limit = env_vars.request_body_size_limit;
+
+    let app_state = config::AppState { client, env_vars };
 
     let app = Router::new()
-        .route("/status/ping", get(get_status_ping))
-        .route("/upload", put(put_upload))
+        .route("/status/ping", get(routes::get_status_ping))
+        .route("/upload", post(routes::post_upload))
+        .layer(TimeoutLayer::new(Duration::from_secs(
+            request_timeout_in_ms,
+        )))
+        .layer(RequestBodyLimitLayer::new(request_body_size_limit))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().include_headers(true))
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(LatencyUnit::Micros),
+                ),
+        )
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
         .unwrap();
-    let server = axum::serve(listener, app);
+    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
-    // Create shutdown signal handler
-    let shutdown_signal = async {
-        let ctrl_c = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
-        };
-
-        #[cfg(unix)]
-        let terminate = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler")
-                .recv()
-                .await;
-        };
-
-        #[cfg(not(unix))]
-        let terminate = std::future::pending::<()>();
-
-        tokio::select! {
-            _ = ctrl_c => {
-                info!("Received SIGINT (Ctrl+C), starting graceful shutdown...");
-            },
-            _ = terminate => {
-                info!("Received SIGTERM, starting graceful shutdown...");
-            },
-        }
-    };
-
-    // Run server with graceful shutdown
-    if let Err(err) = server.with_graceful_shutdown(shutdown_signal).await {
+    if let Err(err) = server.await {
         error!("Server error: {}", err);
     }
 }
 
-async fn get_status_ping() {}
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
 
-#[derive(Serialize, Deserialize)]
-struct ImageUploadRequest {
-    image: String,
-    exam_attempt_id: String,
-}
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
 
-async fn put_upload(
-    State(state): State<AppState>,
-    Json(image_upload_request): Json<ImageUploadRequest>,
-) {
-    let image = image_upload_request.image;
-    let exam_attempt_id = image_upload_request.exam_attempt_id;
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
 
-    upload_to_s3(
-        &state.client,
-        &state.env_vars.bucket_name,
-        image,
-        &exam_attempt_id,
-    )
-    .await;
-    todo!()
-}
-
-async fn upload_to_s3(
-    client: &aws_sdk_s3::Client,
-    bucket_name: &str,
-    image: String,
-    exam_attempt_id: &str,
-) -> impl IntoResponse {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let key = format!("{exam_attempt_id}/{now}");
-    let res = client
-        .put_object()
-        .bucket(bucket_name)
-        .key(key)
-        .body(image.into_bytes().into())
-        .send()
-        .await;
-
-    match res {
-        Ok(_) => Ok(()),
-        Err(e) => Err(()),
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }

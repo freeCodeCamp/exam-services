@@ -16,6 +16,7 @@ use tracing::{Level, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
+mod error;
 mod routes;
 mod s3;
 

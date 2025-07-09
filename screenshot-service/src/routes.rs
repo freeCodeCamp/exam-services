@@ -1,8 +1,8 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, instrument};
 
-use crate::{config::AppState, s3};
+use crate::{config::AppState, error::Error, s3};
 
 #[derive(Serialize, Deserialize)]
 pub struct ImageUploadRequest {
@@ -10,10 +10,11 @@ pub struct ImageUploadRequest {
     exam_attempt_id: String,
 }
 
+#[instrument(skip_all, err(Debug))]
 pub async fn post_upload(
     State(state): State<AppState>,
     Json(image_upload_request): Json<ImageUploadRequest>,
-) {
+) -> Result<impl IntoResponse, Error> {
     let image = image_upload_request.image;
     let exam_attempt_id = image_upload_request.exam_attempt_id;
 
@@ -23,8 +24,7 @@ pub async fn post_upload(
         image,
         &exam_attempt_id,
     )
-    .await;
-    todo!()
+    .await
 }
 
 pub async fn get_status_ping() -> impl IntoResponse {

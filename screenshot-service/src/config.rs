@@ -59,6 +59,7 @@ impl EnvVars {
             Err(_e) => {
                 let base: usize = 2;
                 let exp = 20;
+                // 5MB
                 let default_request_body_size_limit = 5 * base.pow(exp);
                 warn!(
                     "REQUEST_BODY_SIZE_LIMIT not set. Defaulting to {default_request_body_size_limit}"

@@ -7,7 +7,12 @@ use mongodb::{
 };
 use serde::{Deserialize, Serialize};
 
-use prisma::{EnvExam, EnvExamAttempt, EnvExamModeration, EnvExamModerationStatus};
+use prisma::{
+    ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration,
+    ExamEnvironmentExamModerationStatus,
+};
+
+use crate::config::EnvVars;
 
 pub async fn get_collection<'d, T>(client: &Client, collection_name: &str) -> Collection<T>
 where
@@ -37,16 +42,18 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 }
 
 #[tracing::instrument]
-pub async fn update_moderation_collection() -> anyhow::Result<()> {
-    let mongo_uri = std::env::var("MONGODB_URI")?;
-    let client = client(&mongo_uri).await?;
+pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<()> {
+    let client = client(&env_vars.mongodb_uri).await?;
 
     let moderation_collection =
-        get_collection::<EnvExamModeration>(&client, "ExamModeration").await;
-    let attempt_collection = get_collection::<EnvExamAttempt>(&client, "EnvExamAttempt").await;
-    let exam_collection = get_collection::<EnvExam>(&client, "EnvExam").await;
+        get_collection::<ExamEnvironmentExamModeration>(&client, "ExamEnvironmentExamModeration")
+            .await;
+    let attempt_collection =
+        get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
+    let exam_collection =
+        get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
 
-    let moderation_records: Vec<EnvExamModeration> = moderation_collection
+    let moderation_records: Vec<ExamEnvironmentExamModeration> = moderation_collection
         .find(doc! {})
         .await?
         .try_collect()
@@ -88,11 +95,11 @@ pub async fn update_moderation_collection() -> anyhow::Result<()> {
             );
             if expired {
                 tracing::info!("Creating moderation entry for attempt: {}", attempt.id);
-                let exam_moderation = EnvExamModeration {
+                let exam_moderation = ExamEnvironmentExamModeration {
                     id: ObjectId::new(),
                     exam_attempt_id: attempt.id,
                     moderator_id: None,
-                    status: EnvExamModerationStatus::Pending,
+                    status: ExamEnvironmentExamModerationStatus::Pending,
                     feedback: None,
                     moderation_date: None,
                     submission_date: now,

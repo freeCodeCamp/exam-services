@@ -1,0 +1,46 @@
+name: Image Build and Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        site_tlds: [org]
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Create a tagname
+        id: tagname
+        run: |
+          TAGNAME="$(git rev-parse --short HEAD)-$(date +%Y%m%d)-$(date +%H%M)"
+          echo "tagname=$TAGNAME" >> $GITHUB_ENV
+          echo "::set-output name=tag::$TAGNAME"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry with short-lived credentials
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build & Tag Image
+        # Currently, only the moderation-service is enabled
+        run: |
+          docker build . \
+            --tag registry.digitalocean.com/${{ secrets.DOCR_NAME }}/${{ matrix.site_tlds }}/moderation-service:${{ env.tagname }} \
+            --tag registry.digitalocean.com/${{ secrets.DOCR_NAME }}/${{ matrix.site_tlds }}/moderation-service:latest \
+            --file ./moderation-service/Dockerfile
+
+      - name: Push image to DigitalOcean Container Registry
+        run: |
+          docker push registry.digitalocean.com/${{ secrets.DOCR_NAME }}/${{ matrix.site_tlds }}/moderation-service:${{ env.tagname }}
+          docker push registry.digitalocean.com/${{ secrets.DOCR_NAME }}/${{ matrix.site_tlds }}/moderation-service:latest

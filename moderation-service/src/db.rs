@@ -55,10 +55,36 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
     let moderation_records: Vec<ExamEnvironmentExamModeration> = moderation_collection
         .find(doc! {})
-        .projection(doc! {"examAttemptId": true})
+        .projection(doc! {"examAttemptId": true, "_id": true, "submissionDate": true})
         .await?
         .try_collect()
         .await?;
+
+    let now = chrono::Utc::now();
+
+    // If moderation record is pending, and is older than set moderation length, approve
+    for moderation in moderation_records.iter() {
+        if let ExamEnvironmentExamModerationStatus::Pending = moderation.status {
+            let submission_date = moderation.submission_date;
+            if submission_date + env_vars.moderation_length_in_s > now {
+                moderation_collection
+                    .update_one(
+                        doc! {
+                            "_id": moderation.id
+                        },
+                        doc! {
+                            "$set": {
+                                "feedback": "",
+                                "moderationDate": "",
+                                "status": ExamEnvironmentExamModerationStatus::Approved
+                            }
+                        },
+                    )
+                    .await?;
+            }
+        }
+    }
+
     let exam_attempt_ids: Vec<ObjectId> = moderation_records
         .iter()
         .map(|r| r.exam_attempt_id)
@@ -90,7 +116,6 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             let attempt = attempt?;
             let start_time_in_ms = attempt.start_time_in_m_s as i64;
             let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
-            let now = chrono::Utc::now();
             let expired = expiry_time_in_ms < now.timestamp_millis();
 
             tracing::debug!(
@@ -98,6 +123,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 attempt.id,
                 chrono::Utc.timestamp_millis_opt(expiry_time_in_ms)
             );
+
             if expired {
                 tracing::info!("Creating moderation entry for attempt: {}", attempt.id);
                 let exam_moderation = ExamEnvironmentExamModeration {

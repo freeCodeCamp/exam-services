@@ -1,3 +1,4 @@
+use chrono::Duration;
 use sentry::types::Dsn;
 use std::env::var;
 use tracing::{error, warn};
@@ -6,6 +7,7 @@ use tracing::{error, warn};
 pub struct EnvVars {
     pub sentry_dsn: Option<String>,
     pub mongodb_uri: String,
+    pub moderation_length_in_s: Duration,
 }
 
 impl EnvVars {
@@ -33,9 +35,31 @@ impl EnvVars {
             }
         };
 
+        let moderation_length_in_s = match var("MODERATION_LENGTH_IN_S") {
+            Ok(v) => {
+                let seconds = match v.parse() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        panic!(
+                            "MODERATION_LENGTH_IN_S is not a valid whole number of seconds: {:?}",
+                            e
+                        );
+                    }
+                };
+                let duration = Duration::seconds(seconds);
+                duration
+            }
+            Err(_e) => {
+                let seven_days_in_s = 7 * 24 * 60 * 60;
+                let duration = Duration::seconds(seven_days_in_s);
+                duration
+            }
+        };
+
         let env_vars = Self {
             mongodb_uri,
             sentry_dsn,
+            moderation_length_in_s,
         };
 
         env_vars

@@ -55,6 +55,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
     let moderation_records: Vec<ExamEnvironmentExamModeration> = moderation_collection
         .find(doc! {})
+        .projection(doc! {"examAttemptId": true})
         .await?
         .try_collect()
         .await?;
@@ -79,6 +80,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                   "$nin": &exam_attempt_ids
               }
             })
+            .projection(doc! {"_id": true, "startTimeInMS": true})
             .await?;
 
         while let Some(attempt) = attempts.next().await {

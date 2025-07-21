@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 prisma_rust_schema::import_types!(
     schema_path = "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/274738aa3184e79eda84da4218ac19a8183a1682/api/prisma/schema.prisma",
-    derive = [Clone, Debug, Serialize, Deserialize],
+    derive = [Clone, Debug, Serialize, Deserialize, PartialEq, Default],
     include = [
         "ExamEnvironmentExam",
         "ExamEnvironmentExamAttempt",
@@ -22,6 +22,18 @@ prisma_rust_schema::import_types!(
         "ExamEnvironmentExamModerationStatus",
     ]
 );
+
+impl Default for ExamEnvironmentExamModerationStatus {
+    fn default() -> Self {
+        ExamEnvironmentExamModerationStatus::Pending
+    }
+}
+
+impl Default for ExamEnvironmentQuestionType {
+    fn default() -> Self {
+        Self::MultipleChoice
+    }
+}
 
 impl ToString for ExamEnvironmentExamModerationStatus {
     fn to_string(&self) -> String {

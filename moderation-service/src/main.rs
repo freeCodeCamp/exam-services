@@ -39,15 +39,18 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use futures_util::TryStreamExt;
-    use moderation_service::{
-        db,
-        prisma::{ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration},
-    };
+    use moderation_service::db;
     use mongodb::bson::doc;
+    use prisma::{ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration};
+
+    fn setup() {
+        dotenvy::dotenv().ok();
+    }
 
     /// Check if all records in the `EnvExam` collection are deserializable
     #[tokio::test]
     async fn exam_schema_is_unchanged() {
+        setup();
         let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let exam_collection =
@@ -64,6 +67,7 @@ mod tests {
     /// Check if all records in the `EnvExamEnvironmentExamAttempt` collection are deserializable
     #[tokio::test]
     async fn attempt_schema_is_unchanged() {
+        setup();
         let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let attempt_collection =
@@ -81,6 +85,7 @@ mod tests {
     /// Check if all records in the `ExamModeration` collection are deserializable
     #[tokio::test]
     async fn moderation_schema_is_unchanged() {
+        setup();
         let mongo_uri = std::env::var("MONGODB_URI").unwrap();
         let client = db::client(&mongo_uri).await.unwrap();
         let moderation_collection = db::get_collection::<ExamEnvironmentExamModeration>(

@@ -41,6 +41,8 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
     Ok(client)
 }
 
+/// Auto approves old, unmoderated moderation records
+/// Creates moderation records for attempts not already in the queue
 #[tracing::instrument]
 pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;

@@ -20,3 +20,4 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [dev-dependencies]
 mongo_drop = "0.1.1"
+prisma = { path = "../prisma" }

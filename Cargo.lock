@@ -399,7 +399,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1945,8 +1945,8 @@ dependencies = [
 
 [[package]]
 name = "prisma-rust-schema"
-version = "1.0.2"
-source = "git+https://github.com/ShaunSHamilton/prisma-rust-schema.git#3d4e6fa2a2e880c792e83b5b48a23e274d28658f"
+version = "1.0.3"
+source = "git+https://github.com/ShaunSHamilton/prisma-rust-schema.git#54041cb1acb1d6630c99572104b351af15f1b104"
 dependencies = [
  "proc-macro2",
  "psl",
@@ -2285,7 +2285,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2872,7 +2872,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

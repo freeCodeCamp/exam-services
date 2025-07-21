@@ -66,7 +66,10 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     // For all expired attempts, create a moderation entry
     // 1. Get all exams
     // 2. Find all attempts where `(attempt.startTimeInMS + exam.config.totalTimeInMS) < now`
-    let mut exams = exam_collection.find(doc! {}).await?;
+    let mut exams = exam_collection
+        .find(doc! {})
+        .projection(doc! {"_id": true, "config": true})
+        .await?;
     while let Some(exam) = exams.next().await {
         let exam = exam?;
         let total_time_in_ms = exam.config.total_time_in_m_s as i64;

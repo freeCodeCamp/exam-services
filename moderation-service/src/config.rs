@@ -1,6 +1,5 @@
-use chrono::Duration;
 use sentry::types::Dsn;
-use std::env::var;
+use std::{env::var, time::Duration};
 use tracing::{error, warn};
 
 #[derive(Clone, Debug)]
@@ -46,12 +45,12 @@ impl EnvVars {
                         );
                     }
                 };
-                let duration = Duration::seconds(seconds);
+                let duration = Duration::from_secs(seconds);
                 duration
             }
             Err(_e) => {
                 let seven_days_in_s = 7 * 24 * 60 * 60;
-                let duration = Duration::seconds(seven_days_in_s);
+                let duration = Duration::from_secs(seven_days_in_s);
                 duration
             }
         };

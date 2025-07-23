@@ -1,4 +1,5 @@
-use chrono::TimeZone;
+use anyhow::Context;
+use bson::DateTime;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
     Client, Collection,
@@ -8,8 +9,8 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 
 use prisma::{
-    ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration,
-    ExamEnvironmentExamModerationStatus,
+    ExamEnvironmentConfig, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
+    ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
 };
 
 use crate::config::EnvVars;
@@ -43,7 +44,7 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 
 /// Auto approves old, unmoderated moderation records
 /// Creates moderation records for attempts not already in the queue
-#[tracing::instrument]
+#[tracing::instrument(skip_all)]
 pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 
@@ -55,20 +56,39 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     let exam_collection =
         get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
 
-    let moderation_records: Vec<ExamEnvironmentExamModeration> = moderation_collection
+    #[derive(Deserialize)]
+    struct ExamEnvironmentExamModerationProjection {
+        #[serde(rename = "_id")]
+        id: ObjectId,
+        #[serde(rename = "examAttemptId")]
+        exam_attempt_id: ObjectId,
+        #[serde(rename = "submissionDate")]
+        submission_date: DateTime,
+        status: ExamEnvironmentExamModerationStatus,
+    }
+    let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
+        .clone_with_type::<ExamEnvironmentExamModerationProjection>()
         .find(doc! {})
-        .projection(doc! {"examAttemptId": true, "_id": true, "submissionDate": true})
-        .await?
+        .projection(
+            doc! {"examAttemptId": true, "_id": true, "submissionDate": true, "status": true},
+        )
+        .await
+        .context("unable to find moderation records")?
         .try_collect()
-        .await?;
+        .await
+        .context("unable to deserialize moderation records to projection")?;
 
-    let now = chrono::Utc::now();
+    let now = DateTime::now();
 
     // If moderation record is pending, and is older than set moderation length, approve
     for moderation in moderation_records.iter() {
         if let ExamEnvironmentExamModerationStatus::Pending = moderation.status {
             let submission_date = moderation.submission_date;
-            if submission_date + env_vars.moderation_length_in_s > now {
+            let expiry_date =
+                submission_date.saturating_add_duration(env_vars.moderation_length_in_s);
+            tracing::debug!("Moderation {} expires at {}", moderation.id, expiry_date);
+            if now > expiry_date {
+                tracing::info!("Moderation {} auto-moderated", moderation.id);
                 moderation_collection
                     .update_one(
                         doc! {
@@ -76,13 +96,14 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                         },
                         doc! {
                             "$set": {
-                                "feedback": "",
-                                "moderationDate": "",
+                                "feedback": "Auto Approved",
+                                "moderationDate": now,
                                 "status": ExamEnvironmentExamModerationStatus::Approved
                             }
                         },
                     )
-                    .await?;
+                    .await
+                    .context("unable to auto-update moderation collection")?;
             }
         }
     }
@@ -94,17 +115,33 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     // For all expired attempts, create a moderation entry
     // 1. Get all exams
     // 2. Find all attempts where `(attempt.startTimeInMS + exam.config.totalTimeInMS) < now`
+    #[derive(Deserialize)]
+    struct ExamEnvironmentExamProjection {
+        #[serde(rename = "_id")]
+        id: ObjectId,
+        config: ExamEnvironmentConfig,
+    }
     let mut exams = exam_collection
+        .clone_with_type::<ExamEnvironmentExamProjection>()
         .find(doc! {})
         .projection(doc! {"_id": true, "config": true})
-        .await?;
+        .await
+        .context("unable to find exams")?;
     while let Some(exam) = exams.next().await {
-        let exam = exam?;
+        let exam = exam.context("unable to deserialize exam projection")?;
         let total_time_in_ms = exam.config.total_time_in_m_s as i64;
         tracing::debug!("Checking exam: {}", exam.id);
 
+        #[derive(Deserialize)]
+        struct ExamEnvironmentExamAttemptProjection {
+            #[serde(rename = "_id")]
+            id: ObjectId,
+            #[serde(rename = "startTimeInMS")]
+            start_time_in_m_s: usize,
+        }
         // Get all attempts for this exam where the attempt id is not in the moderation collection
         let mut attempts = attempt_collection
+            .clone_with_type::<ExamEnvironmentExamAttemptProjection>()
             .find(doc! {
               "examId": exam.id,
               "_id": {
@@ -112,10 +149,11 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
               }
             })
             .projection(doc! {"_id": true, "startTimeInMS": true})
-            .await?;
+            .await
+            .context("unable to find attempts")?;
 
         while let Some(attempt) = attempts.next().await {
-            let attempt = attempt?;
+            let attempt = attempt.context("unable to deserialize attempt to collection")?;
             let start_time_in_ms = attempt.start_time_in_m_s as i64;
             let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
             let expired = expiry_time_in_ms < now.timestamp_millis();
@@ -123,7 +161,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             tracing::debug!(
                 "Attempt {} expires at: {:?}",
                 attempt.id,
-                chrono::Utc.timestamp_millis_opt(expiry_time_in_ms)
+                DateTime::from_millis(expiry_time_in_ms)
             );
 
             if expired {
@@ -139,7 +177,10 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 };
 
                 // Create a moderation entry
-                moderation_collection.insert_one(exam_moderation).await?;
+                moderation_collection
+                    .insert_one(exam_moderation)
+                    .await
+                    .context("unable to insert moderation record")?;
             }
         }
     }

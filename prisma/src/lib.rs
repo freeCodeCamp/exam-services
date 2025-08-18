@@ -3,7 +3,8 @@ use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
 
 prisma_rust_schema::import_types!(
-    schema_path = "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/274738aa3184e79eda84da4218ac19a8183a1682/api/prisma/schema.prisma",
+    schema_path =
+        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/schema.prisma",
     derive = [Clone, Debug, Serialize, Deserialize, PartialEq],
     include = [
         "ExamEnvironmentExam",
@@ -31,6 +32,7 @@ impl Default for ExamEnvironmentExam {
             config: Default::default(),
             prerequisites: Default::default(),
             deprecated: Default::default(),
+            version: Default::default(),
         }
     }
 }
@@ -44,6 +46,7 @@ impl Default for ExamEnvironmentExamAttempt {
             generated_exam_id: Default::default(),
             question_sets: Default::default(),
             start_time_in_m_s: Default::default(),
+            version: Default::default(),
         }
     }
 }
@@ -155,6 +158,7 @@ impl Default for ExamEnvironmentExamModeration {
             moderation_date: Default::default(),
             moderator_id: Default::default(),
             submission_date: bson::DateTime::now(),
+            version: Default::default(),
         }
     }
 }

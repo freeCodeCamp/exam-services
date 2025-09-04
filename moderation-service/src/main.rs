@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use moderation_service::{config::EnvVars, db::update_moderation_collection};
+use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -8,7 +11,7 @@ async fn main() {
         .with(sentry::integrations::tracing::layer())
         .with(EnvFilter::from_default_env())
         .init();
-    tracing::info!("Starting exam moderation service...");
+    info!("Starting exam moderation service...");
     dotenvy::dotenv().ok();
 
     let env_vars = EnvVars::new();
@@ -20,6 +23,7 @@ async fn main() {
             sentry_dsn,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
+                environment: Some(env_vars.environment.to_string().into()),
                 traces_sample_rate: 1.0,
                 ..Default::default()
             },
@@ -28,11 +32,57 @@ async fn main() {
         None
     };
 
-    if let Err(e) = update_moderation_collection(&env_vars).await {
-        tracing::error!("Error updating moderation collection: {:?}", e);
-    } else {
-        tracing::info!("Successfully updated moderation collection");
-    }
+    let task = update_moderation_collection(&env_vars);
+
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        info!("Received SIGINT (Ctrl+C), starting graceful shutdown...");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+        info!("Received SIGTERM, starting graceful shutdown...");
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    let task = async move {
+        if let Some(secs) = env_vars.timeout_secs {
+            match tokio::time::timeout(Duration::from_secs(secs), task).await {
+                Ok(task_result) => match task_result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("{e}");
+                    }
+                },
+                Err(_) => {
+                    error!("Task timed out after {secs} seconds");
+                }
+            }
+        } else {
+            if let Err(e) = task.await {
+                error!("{e}");
+            }
+            info!("Task completed - exiting.");
+        }
+    };
+
+    tokio::select! {
+        _ = task => { },
+        _ = ctrl_c => {
+            // Migration future dropped here (cancelled)
+        },
+        _ = terminate => {
+            // Migration future dropped here (cancelled)
+        },
+    };
 }
 
 // Tests are needed for schema changes

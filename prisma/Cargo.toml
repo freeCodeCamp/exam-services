@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bson = { version = "2.15.0" }
+bson = { version = "3.0.0", features = ["serde"] }
 prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "1.1.0", features = [
   "bson",
 ] }

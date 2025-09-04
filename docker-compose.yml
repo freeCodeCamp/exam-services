@@ -1,7 +1,7 @@
 services:
   moderation:
     container_name: moderation-service
-    restart: unless-stopped
+    restart: no
     env_file: ./moderation-service/.env
     ports:
       - "3001:3001"

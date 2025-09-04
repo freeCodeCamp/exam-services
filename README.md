@@ -8,6 +8,21 @@ cd moderation-service && cp sample.env .env
 docker compose up -d
 ```
 
+## Deployment
+
+This project is deployed on a Digital Ocean Droplet.
+
+In the VM, set the environment variables, build the image(s), then move the `cron` file into the crontab:
+
+```bash
+git clone https://github.com/freeCodeCamp/exam-services.git
+cd exam-services
+# Depending on the environment, add variables to .env.production or .env.staging
+cp moderation-service/sample.env moderation-service/.env.<environment>
+docker compose build
+crontab cron.<environment>
+```
+
 ## Moderation Service
 
 ### Development

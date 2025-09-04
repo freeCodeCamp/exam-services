@@ -1,9 +1,8 @@
 use anyhow::Context;
-use bson::DateTime;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
     Client, Collection,
-    bson::{doc, oid::ObjectId},
+    bson::{DateTime, doc, oid::ObjectId},
     options::ClientOptions,
 };
 use serde::{Deserialize, Serialize};

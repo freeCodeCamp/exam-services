@@ -1,0 +1,1 @@
+0 * * * * cd ~/exam-services && docker compose run --env-file moderation-service/.env.production --rm moderation

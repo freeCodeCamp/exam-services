@@ -2,7 +2,6 @@ services:
   moderation:
     container_name: moderation-service
     restart: no
-    env_file: ./moderation-service/.env
     ports:
       - "3001:3001"
     logging:
@@ -13,3 +12,8 @@ services:
         compress: "true"
     build:
       dockerfile: ./moderation-service/Dockerfile
+    environment:
+      - MONGODB_URI
+      - SENTRY_DSN
+      - ENVIRONMENT
+      - MODERATION_LENGTH_IN_S

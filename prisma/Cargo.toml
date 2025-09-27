@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 bson = { version = "3.0.0", features = ["serde"] }
-prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "1.1.0", features = [
+prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "2.1.0", features = [
   "bson",
+  "mongodb",
 ] }
 serde = "1.0.219"

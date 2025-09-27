@@ -23,6 +23,21 @@ docker compose build
 crontab cron.<environment>
 ```
 
+The VM has a 4GB Swap to enable local builds on 1GB machines.
+
+<details>
+  <summary>Swap Setup</summary>
+
+```bash
+sudo fallocate -l 4G /swapfile
+# Only root may use
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+```
+
+</details>
+
 ## Moderation Service
 
 ### Development

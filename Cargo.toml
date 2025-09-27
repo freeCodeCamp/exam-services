@@ -1,3 +1,7 @@
 [workspace]
 members = ["moderation-service", "prisma"]
 resolver = "3"
+
+[profile.release]
+# VM has too little memory for high optimization levels
+opt-level = 1

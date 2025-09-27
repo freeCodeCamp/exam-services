@@ -17,7 +17,7 @@ async fn main() {
     let env_vars = EnvVars::new();
 
     let _guard = if let Some(sentry_dsn) = env_vars.sentry_dsn.clone() {
-        tracing::info!("initializing Sentry");
+        info!("initializing Sentry");
         // NOTE: Events are only emitted, once the guard goes out of scope.
         Some(sentry::init((
             sentry_dsn,
@@ -59,7 +59,7 @@ async fn main() {
                 Ok(task_result) => match task_result {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("{e}");
+                        error!("{e:?}");
                     }
                 },
                 Err(_) => {
@@ -68,7 +68,7 @@ async fn main() {
             }
         } else {
             if let Err(e) = task.await {
-                error!("{e}");
+                error!("{e:?}");
             }
             info!("Task completed - exiting.");
         }

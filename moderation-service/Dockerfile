@@ -16,7 +16,7 @@ COPY . .
 RUN cargo build --release
 
 # FROM gcr.io/distroless/cc-debian12 AS runtime
-FROM debian:bullseye-slim AS runtime
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends openssl ca-certificates \

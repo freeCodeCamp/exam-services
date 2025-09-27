@@ -18,7 +18,9 @@ pub async fn get_collection<'d, T>(client: &Client, collection_name: &str) -> Co
 where
     T: Send + Sync + Deserialize<'d> + Serialize,
 {
-    let db = client.database("freecodecamp");
+    let db = client
+        .default_database()
+        .expect("database needs to be defined in the URI");
 
     let collection = db.collection::<T>(collection_name);
     collection
@@ -34,7 +36,9 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 
     // Ping the server to see if you can connect to the cluster
     client
-        .database("freecodecamp")
+        .default_database()
+        .expect("database needs to be defined in the URI")
+        // .database("freecodecamp")
         .run_command(doc! {"ping": 1})
         .await?;
 
@@ -43,6 +47,7 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 
 /// Auto approves old, unmoderated moderation records
 /// Creates moderation records for attempts not already in the queue
+/// Finds approved moderation records and awards the user their certificate
 #[tracing::instrument(skip_all)]
 pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
@@ -55,57 +60,25 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     let exam_collection =
         get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
 
+    let now = DateTime::now();
+
     #[derive(Deserialize)]
     struct ExamEnvironmentExamModerationProjection {
         #[serde(rename = "_id")]
         id: ObjectId,
         #[serde(rename = "examAttemptId")]
         exam_attempt_id: ObjectId,
-        #[serde(rename = "submissionDate")]
-        submission_date: DateTime,
-        status: ExamEnvironmentExamModerationStatus,
     }
+    // Find pending moderation records
     let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
         .clone_with_type::<ExamEnvironmentExamModerationProjection>()
         .find(doc! {})
-        .projection(
-            doc! {"examAttemptId": true, "_id": true, "submissionDate": true, "status": true},
-        )
+        .projection(doc! {"examAttemptId": true, "_id": true,})
         .await
         .context("unable to find moderation records")?
         .try_collect()
         .await
         .context("unable to deserialize moderation records to projection")?;
-
-    let now = DateTime::now();
-
-    // If moderation record is pending, and is older than set moderation length, approve
-    for moderation in moderation_records.iter() {
-        if let ExamEnvironmentExamModerationStatus::Pending = moderation.status {
-            let submission_date = moderation.submission_date;
-            let expiry_date =
-                submission_date.saturating_add_duration(env_vars.moderation_length_in_s);
-            tracing::debug!("Moderation {} expires at {}", moderation.id, expiry_date);
-            if now > expiry_date {
-                tracing::info!("Moderation {} auto-moderated", moderation.id);
-                moderation_collection
-                    .update_one(
-                        doc! {
-                            "_id": moderation.id
-                        },
-                        doc! {
-                            "$set": {
-                                "feedback": "Auto Approved",
-                                "moderationDate": now,
-                                "status": ExamEnvironmentExamModerationStatus::Approved
-                            }
-                        },
-                    )
-                    .await
-                    .context("unable to auto-update moderation collection")?;
-            }
-        }
-    }
 
     let exam_attempt_ids: Vec<ObjectId> = moderation_records
         .iter()
@@ -128,7 +101,10 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         .context("unable to find exams")?;
     while let Some(exam) = exams.next().await {
         let exam = exam.context("unable to deserialize exam projection")?;
-        let total_time_in_ms = exam.config.total_time_in_m_s as i64;
+        let total_time_in_ms = exam
+            .config
+            .total_time_in_s
+            .unwrap_or(exam.config.total_time_in_m_s * 1000);
         tracing::debug!("Checking exam: {}", exam.id);
 
         #[derive(Deserialize)]
@@ -136,7 +112,9 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             #[serde(rename = "_id")]
             id: ObjectId,
             #[serde(rename = "startTimeInMS")]
-            start_time_in_m_s: usize,
+            start_time_in_m_s: i64,
+            #[serde(rename = "startTime")]
+            start_time: Option<DateTime>,
         }
         // Get all attempts for this exam where the attempt id is not in the moderation collection
         let mut attempts = attempt_collection
@@ -147,13 +125,15 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                   "$nin": &exam_attempt_ids
               }
             })
-            .projection(doc! {"_id": true, "startTimeInMS": true})
+            .projection(doc! {"_id": true, "startTimeInMS": true, "startTime": true})
             .await
             .context("unable to find attempts")?;
 
         while let Some(attempt) = attempts.next().await {
             let attempt = attempt.context("unable to deserialize attempt to collection")?;
-            let start_time_in_ms = attempt.start_time_in_m_s as i64;
+            let start_time_in_ms = attempt
+                .start_time
+                .map_or(attempt.start_time_in_m_s, |dt| dt.timestamp_millis());
             let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
             let expired = expiry_time_in_ms < now.timestamp_millis();
 
@@ -186,4 +166,78 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         }
     }
     Ok(())
+}
+
+/// Auto approves old, unmoderated moderation records
+pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Result<()> {
+    let client = client(&env_vars.mongodb_uri).await?;
+
+    let moderation_collection =
+        get_collection::<ExamEnvironmentExamModeration>(&client, "ExamEnvironmentExamModeration")
+            .await;
+
+    #[derive(Deserialize)]
+    struct ExamEnvironmentExamModerationProjection {
+        #[serde(rename = "_id")]
+        id: ObjectId,
+        #[serde(rename = "submissionDate")]
+        submission_date: DateTime,
+        status: ExamEnvironmentExamModerationStatus,
+    }
+    // Find pending moderation records
+    let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
+        .clone_with_type::<ExamEnvironmentExamModerationProjection>()
+        .find(doc! {
+            "status": ExamEnvironmentExamModerationStatus::Pending
+        })
+        .projection(doc! { "_id": true, "submissionDate": true})
+        .await
+        .context("unable to find moderation records")?
+        .try_collect()
+        .await
+        .context("unable to deserialize moderation records to projection")?;
+
+    let now = DateTime::now();
+
+    // If moderation record is pending, and is older than set moderation length, approve
+    for moderation in moderation_records.iter() {
+        let submission_date = moderation.submission_date;
+        let expiry_date = submission_date.saturating_add_duration(env_vars.moderation_length_in_s);
+        tracing::debug!("Moderation {} expires at {}", moderation.id, expiry_date);
+        if now > expiry_date {
+            tracing::info!("Moderation {} auto-moderated", moderation.id);
+            moderation_collection
+                .update_one(
+                    doc! {
+                        "_id": moderation.id
+                    },
+                    doc! {
+                        "$set": {
+                            "feedback": "Auto Approved",
+                            "moderationDate": now,
+                            "status": ExamEnvironmentExamModerationStatus::Approved
+                        }
+                    },
+                )
+                .await
+                .context("unable to auto-update moderation collection")?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Finds approved moderation records and awards the user their certificate
+pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
+    let client = client(&env_vars.mongodb_uri).await?;
+
+    let moderation_collection =
+        get_collection::<ExamEnvironmentExamModeration>(&client, "ExamEnvironmentExamModeration")
+            .await;
+    let attempt_collection =
+        get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
+    let exam_collection =
+        get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
+
+    todo!()
 }

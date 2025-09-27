@@ -3,8 +3,11 @@ use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
 
 prisma_rust_schema::import_types!(
-    schema_path =
-        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/schema.prisma",
+    schema_paths = [
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/schema.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/exam-environment.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/exam-creator.prisma",
+    ],
     derive = [Clone, Debug, Serialize, Deserialize, PartialEq],
     include = [
         "ExamEnvironmentExam",
@@ -46,6 +49,7 @@ impl Default for ExamEnvironmentExamAttempt {
             generated_exam_id: Default::default(),
             question_sets: Default::default(),
             start_time_in_m_s: Default::default(),
+            start_time: Default::default(),
             version: Default::default(),
         }
     }
@@ -66,6 +70,7 @@ impl Default for ExamEnvironmentMultipleChoiceQuestionAttempt {
             id: Default::default(),
             answers: Default::default(),
             submission_time_in_m_s: Default::default(),
+            submission_time: Default::default(),
         }
     }
 }
@@ -120,8 +125,10 @@ impl Default for ExamEnvironmentConfig {
             note: Default::default(),
             tags: Default::default(),
             total_time_in_m_s: Default::default(),
+            total_time_in_s: Default::default(),
             question_sets: Default::default(),
             retake_time_in_m_s: Default::default(),
+            retake_time_in_s: Default::default(),
             passing_percent: Default::default(),
         }
     }

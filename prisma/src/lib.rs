@@ -1,15 +1,19 @@
-use bson::Bson;
+use bson::{Bson, oid::ObjectId};
 use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
+use serde_json;
 
 prisma_rust_schema::import_types!(
     schema_paths = [
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/schema.prisma",
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/exam-environment.prisma",
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/breaking_prisma-dates/api/prisma/exam-creator.prisma",
+        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/schema.prisma",
+        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/exam-environment.prisma",
+        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/exam-creator.prisma",
     ],
     derive = [Clone, Debug, Serialize, Deserialize, PartialEq],
     include = [
+        "CompletedChallenge",
+        "File",
+        "ExamResults",
         "ExamEnvironmentExam",
         "ExamEnvironmentExamAttempt",
         "ExamEnvironmentQuestionSetAttempt",
@@ -24,8 +28,17 @@ prisma_rust_schema::import_types!(
         "ExamEnvironmentAnswer",
         "ExamEnvironmentExamModeration",
         "ExamEnvironmentExamModerationStatus",
+        "ExamEnvironmentChallenge"
     ]
 );
+
+#[derive(Deserialize, Serialize)]
+pub struct User {
+    #[serde(rename = "_id")]
+    pub id: ObjectId,
+    #[serde(rename = "completedChallenges")]
+    pub completed_challenges: Vec<CompletedChallenge>,
+}
 
 impl Default for ExamEnvironmentExam {
     fn default() -> Self {

@@ -1,6 +1,15 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
-use moderation_service::{config::EnvVars, db::update_moderation_collection};
+use futures_util::future::join_all;
+use moderation_service::{
+    config::EnvVars,
+    db::{
+        auto_approve_moderation_records, delete_practice_exam_attempts,
+        update_moderation_collection,
+    },
+};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -32,7 +41,9 @@ async fn main() {
         None
     };
 
-    let task = update_moderation_collection(&env_vars);
+    // Build a future that runs all registered tasks (easy to extend by adding to the vector
+    // inside `run_registered_tasks`).
+    let all_tasks = run_registered_tasks(&env_vars);
 
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -53,24 +64,15 @@ async fn main() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    let task = async move {
+    let task = async {
         if let Some(secs) = env_vars.timeout_secs {
-            match tokio::time::timeout(Duration::from_secs(secs), task).await {
-                Ok(task_result) => match task_result {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("{e:?}");
-                    }
-                },
-                Err(_) => {
-                    error!("Task timed out after {secs} seconds");
-                }
+            match tokio::time::timeout(Duration::from_secs(secs), all_tasks).await {
+                Ok(_) => info!("All tasks completed within timeout."),
+                Err(_) => error!("Tasks timed out after {secs} seconds"),
             }
         } else {
-            if let Err(e) = task.await {
-                error!("{e:?}");
-            }
-            info!("Task completed - exiting.");
+            all_tasks.await;
+            info!("All tasks completed - exiting.");
         }
     };
 
@@ -83,6 +85,45 @@ async fn main() {
             // Migration future dropped here (cancelled)
         },
     };
+}
+
+/// Runs all registered maintenance tasks concurrently.
+/// To add a new task, just push a (name, future) pair into the `tasks` vector.
+async fn run_registered_tasks(env_vars: &EnvVars) {
+    type TaskFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+    // Clone env vars so each task owns its copy (allowing 'static futures)
+    let tasks: Vec<(&'static str, TaskFuture)> = vec![
+        {
+            let env = env_vars.clone();
+            (
+                "update_moderation_collection",
+                Box::pin(async move { update_moderation_collection(&env).await }),
+            )
+        },
+        {
+            let env = env_vars.clone();
+            (
+                "auto_approve_moderation_records",
+                Box::pin(async move { auto_approve_moderation_records(&env).await }),
+            )
+        },
+        {
+            let env = env_vars.clone();
+            (
+                "delete_practice_exam_attempts",
+                Box::pin(async move { delete_practice_exam_attempts(&env).await }),
+            )
+        },
+    ];
+
+    let wrapped = tasks.into_iter().map(|(name, fut)| async move {
+        match fut.await {
+            Ok(_) => info!("Task {name} completed"),
+            Err(e) => error!("Task {name} failed: {e:?}"),
+        }
+    });
+
+    join_all(wrapped).await;
 }
 
 // Tests are needed for schema changes

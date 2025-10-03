@@ -1,18 +1,20 @@
 use anyhow::Context;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
-    Client, Collection,
+    Client, Collection, Namespace,
     bson::{DateTime, doc, oid::ObjectId},
     options::ClientOptions,
 };
 use serde::{Deserialize, Serialize};
 
 use prisma::{
-    ExamEnvironmentConfig, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
-    ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
+    CompletedChallenge, ExamEnvironmentChallenge, ExamEnvironmentConfig, ExamEnvironmentExam,
+    ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
 };
 
 use crate::config::EnvVars;
+
+const PRACTICE_EXAM_ID: &str = "674819431ed2e8ac8d170f5e";
 
 pub async fn get_collection<'d, T>(client: &Client, collection_name: &str) -> Collection<T>
 where
@@ -48,7 +50,7 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
 /// Auto approves old, unmoderated moderation records
 /// Creates moderation records for attempts not already in the queue
 /// Finds approved moderation records and awards the user their certificate
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(skip_all, err(Debug))]
 pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 
@@ -64,16 +66,16 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
     #[derive(Deserialize)]
     struct ExamEnvironmentExamModerationProjection {
-        #[serde(rename = "_id")]
-        id: ObjectId,
+        // #[serde(rename = "_id")]
+        // id: ObjectId,
         #[serde(rename = "examAttemptId")]
         exam_attempt_id: ObjectId,
     }
-    // Find pending moderation records
+
     let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
         .clone_with_type::<ExamEnvironmentExamModerationProjection>()
         .find(doc! {})
-        .projection(doc! {"examAttemptId": true, "_id": true,})
+        .projection(doc! {"examAttemptId": true, "_id": true})
         .await
         .context("unable to find moderation records")?
         .try_collect()
@@ -101,6 +103,14 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         .context("unable to find exams")?;
     while let Some(exam) = exams.next().await {
         let exam = exam.context("unable to deserialize exam projection")?;
+
+        let practice_exam_id =
+            ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
+        if exam.id == practice_exam_id {
+            tracing::debug!("Skipping practice exam: {}", exam.id);
+            continue;
+        }
+
         let total_time_in_ms = exam
             .config
             .total_time_in_s
@@ -117,8 +127,10 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             start_time: Option<DateTime>,
         }
         // Get all attempts for this exam where the attempt id is not in the moderation collection
+        // TODO: Also, where the attempt was passed.
         let mut attempts = attempt_collection
             .clone_with_type::<ExamEnvironmentExamAttemptProjection>()
+            // _id must not be in existing exam attempts
             .find(doc! {
               "examId": exam.id,
               "_id": {
@@ -169,6 +181,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 }
 
 /// Auto approves old, unmoderated moderation records
+#[tracing::instrument(skip_all, err(Debug))]
 pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 
@@ -182,7 +195,6 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
         id: ObjectId,
         #[serde(rename = "submissionDate")]
         submission_date: DateTime,
-        status: ExamEnvironmentExamModerationStatus,
     }
     // Find pending moderation records
     let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
@@ -227,7 +239,20 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
     Ok(())
 }
 
-/// Finds approved moderation records and awards the user their certificate
+#[derive(Deserialize, Serialize)]
+struct User {
+    #[serde(rename = "_id")]
+    id: ObjectId,
+    #[serde(rename = "completedChallenges")]
+    completed_challenges: Vec<prisma::CompletedChallenge>,
+}
+
+/// Awards certification (challenge) IDs to users:
+/// 1. Finds all approved moderation records where challengesAwarded is false
+/// 2. Finds the associated exam attempt, and from that the user ID and exam ID
+/// 3. Finds the challenge ID associated with the exam ID
+/// 4. Updates the user record to add the challenge ID to completedChallenges if not already present
+/// 5. Sets challengesAwarded to true on the moderation record
 pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 
@@ -236,8 +261,116 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             .await;
     let attempt_collection =
         get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
-    let exam_collection =
-        get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
+    let exam_environment_challenge_collection =
+        get_collection::<ExamEnvironmentChallenge>(&client, "ExamEnvironmentChallenge").await;
+    let user_collection = get_collection::<User>(&client, "user").await;
 
-    todo!()
+    #[derive(Deserialize)]
+    struct AttemptId {
+        #[serde(rename = "examAttemptId")]
+        pub exam_attempt_id: ObjectId,
+    }
+    let attempt_ids: Vec<AttemptId> = moderation_collection.clone_with_type::<AttemptId>().find(doc!{"challengesAwarded": false, "status": ExamEnvironmentExamModerationStatus::Approved}).projection(doc!{"examAttemptId": true, "startTime": true}).await?.try_collect().await?;
+
+    #[derive(Deserialize)]
+    struct Attempt {
+        #[serde(rename = "examId")]
+        pub exam_id: ObjectId,
+        #[serde(rename = "userId")]
+        pub user_id: ObjectId,
+        #[serde(rename = "startTime")]
+        pub start_time: DateTime,
+    }
+
+    let attempts: Vec<Attempt> = attempt_collection.clone_with_type::<Attempt>()
+        .find(doc!{"_id": {"$in": attempt_ids.iter().map(|id| id.exam_attempt_id).collect::<Vec<_>>()}})
+        .projection(doc!{"examId": true, "userId": true, "startTime": true})
+        .await?
+        .try_collect()
+        .await?;
+
+    let unique_exam_ids = attempts
+        .iter()
+        .map(|a| a.exam_id)
+        .collect::<std::collections::HashSet<_>>();
+
+    let exam_environment_challenges: Vec<ExamEnvironmentChallenge> =
+        exam_environment_challenge_collection
+            .find(doc! {"examId": {"$in": unique_exam_ids}})
+            .await?
+            .try_collect()
+            .await?;
+
+    // Construct CompletedChallenge update for `user_id` pushing `challenge_id` if `exam_id` matches, and `challenge_id` is not already in `user.completedChallenges[].id`
+
+    let mut updates = vec![];
+    for attempt in attempts {
+        let completed_date = attempt.start_time.timestamp_millis().into();
+        let id = exam_environment_challenges
+            .iter()
+            .find(|c| c.exam_id == attempt.exam_id)
+            .expect("ExamEnvironmentChallenge to exist")
+            .challenge_id
+            .to_hex();
+        let completed_challenge = CompletedChallenge {
+            completed_date,
+            id,
+            challenge_type: Default::default(),
+            files: Default::default(),
+            github_link: Default::default(),
+            is_manually_approved: Default::default(),
+            solution: Default::default(),
+            exam_results: Default::default(),
+        };
+
+        let namespace = Namespace::new("freecodecamp", "user");
+        updates.push(mongodb::options::UpdateOneModel::builder().namespace(namespace)
+            .filter(doc!{"_id": attempt.user_id, "completedChallenges.id": {"$ne": &completed_challenge.id}})
+            .update(doc!{"$push": {"completedChallenges": mongodb::bson::serialize_to_bson(&completed_challenge)?}}).build());
+    }
+
+    let res = user_collection.client().bulk_write(updates).await?;
+
+    tracing::info!(
+        "Updated {} users with new challenge IDs",
+        res.modified_count
+    );
+
+    // Finally, update all moderation records to set challengesAwarded to true where status is approved and challengesAwarded is false
+    let update_result = moderation_collection
+        .update_many(
+            doc! {"challengesAwarded": false, "status": ExamEnvironmentExamModerationStatus::Approved},
+            doc! {"$set": {"challengesAwarded": true}},
+        )
+        .await
+        .context("unable to update moderation records to set challengesAwarded to true")?;
+    tracing::info!(
+        "Updated {} moderation records to set challengesAwarded to true",
+        update_result.modified_count
+    );
+
+    Ok(())
+}
+
+pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result<()> {
+    let client = client(&env_vars.mongodb_uri).await?;
+
+    let attempt_collection =
+        get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
+
+    let practice_exam_id =
+        ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
+    let delete_result = attempt_collection
+        .delete_many(doc! {
+            "examId": practice_exam_id
+        })
+        .await
+        .context("unable to delete practice exam attempts")?;
+
+    tracing::info!(
+        "Deleted {} practice exam attempts",
+        delete_result.deleted_count
+    );
+
+    Ok(())
 }

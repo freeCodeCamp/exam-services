@@ -6,7 +6,7 @@ use futures_util::future::join_all;
 use moderation_service::{
     config::EnvVars,
     db::{
-        auto_approve_moderation_records, delete_practice_exam_attempts,
+        auto_approve_moderation_records, award_challenge_ids, delete_practice_exam_attempts,
         update_moderation_collection,
     },
 };
@@ -15,9 +15,22 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 #[tokio::main]
 async fn main() {
+    let sentry_layer =
+        sentry::integrations::tracing::layer().event_filter(|md| match *md.level() {
+            // Capture error level events as Sentry events
+            // These are grouped into issues, representing high-severity errors to act upon
+            tracing::Level::ERROR => {
+                sentry::integrations::tracing::EventFilter::Event
+                    | sentry::integrations::tracing::EventFilter::Log
+            }
+            // Ignore trace level events, as they're too verbose
+            tracing::Level::TRACE => sentry::integrations::tracing::EventFilter::Ignore,
+            // Capture everything else as a traditional structured log
+            _ => sentry::integrations::tracing::EventFilter::Log,
+        });
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty())
-        .with(sentry::integrations::tracing::layer())
+        .with(sentry_layer)
         .with(EnvFilter::from_default_env())
         .init();
     info!("Starting exam moderation service...");
@@ -34,6 +47,7 @@ async fn main() {
                 release: sentry::release_name!(),
                 environment: Some(env_vars.environment.to_string().into()),
                 traces_sample_rate: 1.0,
+                enable_logs: true,
                 ..Default::default()
             },
         )))
@@ -112,6 +126,13 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
             (
                 "delete_practice_exam_attempts",
                 Box::pin(async move { delete_practice_exam_attempts(&env).await }),
+            )
+        },
+        {
+            let env = env_vars.clone();
+            (
+                "award_challenge_ids",
+                Box::pin(async move { award_challenge_ids(&env).await }),
             )
         },
     ];

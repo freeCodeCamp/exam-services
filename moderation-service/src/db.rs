@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use prisma::{
     CompletedChallenge, ExamEnvironmentChallenge, ExamEnvironmentConfig, ExamEnvironmentExam,
     ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
+    ExamEnvironmentGeneratedExam,
 };
 
-use crate::config::EnvVars;
+use crate::{attempt::check_attempt_pass, config::EnvVars};
 
 const PRACTICE_EXAM_ID: &str = "674819431ed2e8ac8d170f5e";
 
@@ -253,6 +254,7 @@ struct User {
 /// 3. Finds the challenge ID associated with the exam ID
 /// 4. Updates the user record to add the challenge ID to completedChallenges if not already present
 /// 5. Sets challengesAwarded to true on the moderation record
+#[tracing::instrument(skip_all, err(Debug))]
 pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 
@@ -261,6 +263,11 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             .await;
     let attempt_collection =
         get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
+    let exam_collection =
+        get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
+    let generated_exam_collection =
+        get_collection::<ExamEnvironmentGeneratedExam>(&client, "ExamEnvironmentGeneratedExam")
+            .await;
     let exam_environment_challenge_collection =
         get_collection::<ExamEnvironmentChallenge>(&client, "ExamEnvironmentChallenge").await;
     let user_collection = get_collection::<User>(&client, "user").await;
@@ -272,46 +279,82 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
     }
     let attempt_ids: Vec<AttemptId> = moderation_collection.clone_with_type::<AttemptId>().find(doc!{"challengesAwarded": false, "status": ExamEnvironmentExamModerationStatus::Approved}).projection(doc!{"examAttemptId": true, "startTime": true}).await?.try_collect().await?;
 
-    #[derive(Deserialize)]
-    struct Attempt {
-        #[serde(rename = "examId")]
-        pub exam_id: ObjectId,
-        #[serde(rename = "userId")]
-        pub user_id: ObjectId,
-        #[serde(rename = "startTime")]
-        pub start_time: DateTime,
-    }
-
-    let attempts: Vec<Attempt> = attempt_collection.clone_with_type::<Attempt>()
-        .find(doc!{"_id": {"$in": attempt_ids.iter().map(|id| id.exam_attempt_id).collect::<Vec<_>>()}})
-        .projection(doc!{"examId": true, "userId": true, "startTime": true})
+    let attempts = attempt_collection.find(doc!{"_id": {"$in": attempt_ids.iter().map(|id| id.exam_attempt_id).collect::<Vec<_>>()}})
         .await?
-        .try_collect()
+        .try_collect::<Vec<_>>()
         .await?;
 
     let unique_exam_ids = attempts
         .iter()
         .map(|a| a.exam_id)
         .collect::<std::collections::HashSet<_>>();
+    let unique_generated_exam_ids = attempts
+        .iter()
+        .map(|a| a.generated_exam_id)
+        .collect::<std::collections::HashSet<_>>();
+
+    tracing::debug!("Unique exam IDs: {:?}", unique_exam_ids);
 
     let exam_environment_challenges: Vec<ExamEnvironmentChallenge> =
         exam_environment_challenge_collection
-            .find(doc! {"examId": {"$in": unique_exam_ids}})
+            .find(doc! {"examId": {"$in": &unique_exam_ids}})
             .await?
             .try_collect()
             .await?;
 
     // Construct CompletedChallenge update for `user_id` pushing `challenge_id` if `exam_id` matches, and `challenge_id` is not already in `user.completedChallenges[].id`
+    let exams = exam_collection
+        .find(doc! {"_id": {"$in": unique_exam_ids}})
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
+    let generated_exams = generated_exam_collection
+        .find(doc! {"_id": {"$in": unique_generated_exam_ids}})
+        .await?
+        .try_collect::<Vec<_>>()
+        .await?;
 
     let mut updates = vec![];
     for attempt in attempts {
-        let completed_date = attempt.start_time.timestamp_millis().into();
-        let id = exam_environment_challenges
+        // Check attempt passes exam:
+        let exam = exams
+            .iter()
+            .find(|e| e.id == attempt.exam_id)
+            .expect("exam must exist for attempt");
+        let generated_exam = generated_exams
+            .iter()
+            .find(|ge| ge.id == attempt.generated_exam_id)
+            .expect("generated exam must exist for attempt");
+        let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
+
+        tracing::debug!(
+            attempt_id = attempt.id.to_hex(),
+            exam_id = attempt.exam_id.to_hex(),
+            "Attempt passed: {pass}"
+        );
+        if !pass {
+            continue;
+        }
+
+        let completed_date = attempt
+            .start_time
+            .expect("migration to have been run")
+            .timestamp_millis()
+            .into();
+        let id = match exam_environment_challenges
             .iter()
             .find(|c| c.exam_id == attempt.exam_id)
-            .expect("ExamEnvironmentChallenge to exist")
-            .challenge_id
-            .to_hex();
+        {
+            Some(challenge) => challenge.challenge_id.to_hex(),
+            None => {
+                tracing::warn!(
+                    user_id = attempt.user_id.to_hex(),
+                    exam_id = attempt.exam_id.to_hex(),
+                    "No challenge found to award user"
+                );
+                continue;
+            }
+        };
         let completed_challenge = CompletedChallenge {
             completed_date,
             id,
@@ -329,12 +372,14 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             .update(doc!{"$push": {"completedChallenges": mongodb::bson::serialize_to_bson(&completed_challenge)?}}).build());
     }
 
-    let res = user_collection.client().bulk_write(updates).await?;
+    if !updates.is_empty() {
+        let res = user_collection.client().bulk_write(updates).await?;
 
-    tracing::info!(
-        "Updated {} users with new challenge IDs",
-        res.modified_count
-    );
+        tracing::info!(
+            "Updated {} users with new challenge IDs",
+            res.modified_count
+        );
+    }
 
     // Finally, update all moderation records to set challengesAwarded to true where status is approved and challengesAwarded is false
     let update_result = moderation_collection
@@ -352,6 +397,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip_all, err(Debug))]
 pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result<()> {
     let client = client(&env_vars.mongodb_uri).await?;
 

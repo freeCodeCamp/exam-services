@@ -63,13 +63,15 @@ async fn moderation_record_is_created() {
     // Create 2 attempts
     let attempt_1 = prisma::ExamEnvironmentExamAttempt {
         id: ObjectId::new(),
-        start_time_in_m_s: mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time,
+        start_time_in_m_s: (mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time)
+            as f64,
         exam_id: exam_1.id,
         ..Default::default()
     };
     let attempt_2 = prisma::ExamEnvironmentExamAttempt {
         id: ObjectId::new(),
-        start_time_in_m_s: mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time,
+        start_time_in_m_s: (mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time)
+            as f64,
         exam_id: exam_2.id,
         ..Default::default()
     };
@@ -140,7 +142,8 @@ async fn moderation_record_is_created() {
     // Create 3rd attempt
     let attempt_3 = prisma::ExamEnvironmentExamAttempt {
         id: ObjectId::new(),
-        start_time_in_m_s: mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time,
+        start_time_in_m_s: (mongodb::bson::DateTime::now().timestamp_millis() - exam_total_time)
+            as f64,
         exam_id: exam_1.id,
         ..Default::default()
     };

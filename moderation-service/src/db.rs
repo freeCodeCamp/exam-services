@@ -166,8 +166,9 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                     feedback: None,
                     moderation_date: None,
                     submission_date: now,
+                    challenges_awarded: false,
                     // TODO: This should not be set outside of prisma in `freeCodeCamp/freeCodeCamp/api`
-                    version: 1,
+                    version: 2,
                 };
 
                 // Create a moderation entry

@@ -5,9 +5,9 @@ use serde_json;
 
 prisma_rust_schema::import_types!(
     schema_paths = [
-        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/schema.prisma",
-        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/exam-environment.prisma",
-        "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/exam-creator.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/schema.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/exam-environment.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/exam-creator.prisma",
     ],
     derive = [Clone, Debug, Serialize, Deserialize, PartialEq],
     include = [
@@ -41,7 +41,7 @@ prisma_rust_schema::import_types!(
         struct ExamEnvironmentMultipleChoiceQuestionAttempt {
             #[serde(rename = "submissionTimeInMS")]
             pub submission_time_in_m_s: f64
-        },
+        }
     ]
 );
 
@@ -191,6 +191,7 @@ impl Default for ExamEnvironmentExamModeration {
             moderation_date: Default::default(),
             moderator_id: Default::default(),
             submission_date: bson::DateTime::now(),
+            challenges_awarded: Default::default(),
             version: Default::default(),
         }
     }

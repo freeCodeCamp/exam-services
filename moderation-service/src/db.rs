@@ -156,8 +156,16 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 DateTime::from_millis(expiry_time_in_ms)
             );
 
+            let submission_date = DateTime::from_millis(
+                attempt
+                    .start_time
+                    .context("missing start_time after migration")?
+                    .timestamp_millis()
+                    + total_time_in_ms,
+            );
+
             if expired {
-                tracing::info!("Creating moderation entry for attempt: {}", attempt.id);
+                tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
                 let exam_moderation = ExamEnvironmentExamModeration {
                     id: ObjectId::new(),
                     exam_attempt_id: attempt.id,
@@ -165,7 +173,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                     status: ExamEnvironmentExamModerationStatus::Pending,
                     feedback: None,
                     moderation_date: None,
-                    submission_date: now,
+                    submission_date,
                     challenges_awarded: false,
                     // TODO: This should not be set outside of prisma in `freeCodeCamp/freeCodeCamp/api`
                     version: 2,
@@ -321,11 +329,11 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         let exam = exams
             .iter()
             .find(|e| e.id == attempt.exam_id)
-            .expect("exam must exist for attempt");
+            .context("exam must exist for attempt")?;
         let generated_exam = generated_exams
             .iter()
             .find(|ge| ge.id == attempt.generated_exam_id)
-            .expect("generated exam must exist for attempt");
+            .context("generated exam must exist for attempt")?;
         let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
 
         tracing::debug!(
@@ -339,7 +347,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
 
         let completed_date = attempt
             .start_time
-            .expect("migration to have been run")
+            .context("attempt start_time missing")?
             .timestamp_millis()
             .into();
         let id = match exam_environment_challenges

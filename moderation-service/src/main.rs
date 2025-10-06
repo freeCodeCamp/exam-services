@@ -29,9 +29,12 @@ async fn main() {
             _ => sentry::integrations::tracing::EventFilter::Log,
         });
     tracing_subscriber::registry()
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=info", env!("CARGO_CRATE_NAME")).into()),
+        )
         .with(tracing_subscriber::fmt::layer().pretty())
         .with(sentry_layer)
-        .with(EnvFilter::from_default_env())
         .init();
     info!("Starting exam moderation service...");
     dotenvy::dotenv().ok();

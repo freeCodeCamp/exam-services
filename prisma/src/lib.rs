@@ -34,6 +34,12 @@ prisma_rust_schema::import_types!(
         "ExamEnvironmentGeneratedMultipleChoiceQuestion",
     ],
     patch = [
+        struct ExamEnvironmentConfig {
+            #[serde(rename = "totalTimeInMS")]
+            pub total_time_in_m_s: f64,
+            #[serde(rename = "retakeTimeInMS")]
+            pub retake_time_in_m_s: f64
+        },
         struct ExamEnvironmentExamAttempt {
             #[serde(rename = "startTimeInMS")]
             pub start_time_in_m_s: f64

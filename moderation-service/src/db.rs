@@ -115,7 +115,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         let total_time_in_ms = exam
             .config
             .total_time_in_s
-            .unwrap_or(exam.config.total_time_in_m_s * 1000);
+            .unwrap_or(exam.config.total_time_in_m_s as i64 * 1000);
         tracing::debug!("Checking exam: {}", exam.id);
 
         #[derive(Deserialize)]

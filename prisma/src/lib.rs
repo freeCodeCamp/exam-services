@@ -1,13 +1,13 @@
-use bson::{Bson, oid::ObjectId};
+use bson::{Bson, DateTime, oid::ObjectId};
 use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
 prisma_rust_schema::import_types!(
     schema_paths = [
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/schema.prisma",
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/exam-environment.prisma",
-        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/chore_moderation-challenges/api/prisma/exam-creator.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/feat_remove-unused-exam-fields/api/prisma/schema.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/feat_remove-unused-exam-fields/api/prisma/exam-environment.prisma",
+        "https://raw.githubusercontent.com/ShaunSHamilton/freeCodeCamp/feat_remove-unused-exam-fields/api/prisma/exam-creator.prisma",
     ],
     derive = [Clone, Debug, Serialize, Deserialize, PartialEq],
     include = [
@@ -33,22 +33,6 @@ prisma_rust_schema::import_types!(
         "ExamEnvironmentGeneratedQuestionSet",
         "ExamEnvironmentGeneratedMultipleChoiceQuestion",
     ],
-    patch = [
-        struct ExamEnvironmentConfig {
-            #[serde(rename = "totalTimeInMS")]
-            pub total_time_in_m_s: f64,
-            #[serde(rename = "retakeTimeInMS")]
-            pub retake_time_in_m_s: f64
-        },
-        struct ExamEnvironmentExamAttempt {
-            #[serde(rename = "startTimeInMS")]
-            pub start_time_in_m_s: f64
-        },
-        struct ExamEnvironmentMultipleChoiceQuestionAttempt {
-            #[serde(rename = "submissionTimeInMS")]
-            pub submission_time_in_m_s: f64
-        }
-    ]
 );
 
 #[derive(Deserialize, Serialize)]
@@ -80,8 +64,7 @@ impl Default for ExamEnvironmentExamAttempt {
             exam_id: Default::default(),
             generated_exam_id: Default::default(),
             question_sets: Default::default(),
-            start_time_in_m_s: Default::default(),
-            start_time: Default::default(),
+            start_time: DateTime::now(),
             version: Default::default(),
         }
     }
@@ -101,8 +84,7 @@ impl Default for ExamEnvironmentMultipleChoiceQuestionAttempt {
         Self {
             id: Default::default(),
             answers: Default::default(),
-            submission_time_in_m_s: Default::default(),
-            submission_time: Default::default(),
+            submission_time: DateTime::now(),
         }
     }
 }
@@ -156,10 +138,8 @@ impl Default for ExamEnvironmentConfig {
             name: Default::default(),
             note: Default::default(),
             tags: Default::default(),
-            total_time_in_m_s: Default::default(),
             total_time_in_s: Default::default(),
             question_sets: Default::default(),
-            retake_time_in_m_s: Default::default(),
             retake_time_in_s: Default::default(),
             passing_percent: Default::default(),
         }

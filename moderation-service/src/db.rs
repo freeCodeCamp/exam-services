@@ -112,20 +112,15 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             continue;
         }
 
-        let total_time_in_ms = exam
-            .config
-            .total_time_in_s
-            .unwrap_or(exam.config.total_time_in_m_s as i64 * 1000);
+        let total_time_in_ms = exam.config.total_time_in_s * 1000;
         tracing::debug!("Checking exam: {}", exam.id);
 
         #[derive(Deserialize)]
         struct ExamEnvironmentExamAttemptProjection {
             #[serde(rename = "_id")]
             id: ObjectId,
-            #[serde(rename = "startTimeInMS")]
-            start_time_in_m_s: i64,
             #[serde(rename = "startTime")]
-            start_time: Option<DateTime>,
+            start_time: DateTime,
         }
         // Get all attempts for this exam where the attempt id is not in the moderation collection
         // TODO: Also, where the attempt was passed.
@@ -144,9 +139,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
         while let Some(attempt) = attempts.next().await {
             let attempt = attempt.context("unable to deserialize attempt to collection")?;
-            let start_time_in_ms = attempt
-                .start_time
-                .map_or(attempt.start_time_in_m_s, |dt| dt.timestamp_millis());
+            let start_time_in_ms = attempt.start_time.timestamp_millis();
             let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
             let expired = expiry_time_in_ms < now.timestamp_millis();
 
@@ -156,13 +149,8 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 DateTime::from_millis(expiry_time_in_ms)
             );
 
-            let submission_date = DateTime::from_millis(
-                attempt
-                    .start_time
-                    .context("missing start_time after migration")?
-                    .timestamp_millis()
-                    + total_time_in_ms,
-            );
+            let submission_date =
+                DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
             if expired {
                 tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
@@ -345,11 +333,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             continue;
         }
 
-        let completed_date = attempt
-            .start_time
-            .context("attempt start_time missing")?
-            .timestamp_millis()
-            .into();
+        let completed_date = attempt.start_time.timestamp_millis().into();
         let id = match exam_environment_challenges
             .iter()
             .find(|c| c.exam_id == attempt.exam_id)

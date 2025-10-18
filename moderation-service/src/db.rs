@@ -89,7 +89,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         .collect();
     // For all expired attempts, create a moderation entry
     // 1. Get all exams
-    // 2. Find all attempts where `(attempt.startTimeInMS + exam.config.totalTimeInMS) < now`
+    // 2. Find all attempts where `(attempt.startTime + exam.config.totalTimeInS) < now`
     #[derive(Deserialize)]
     struct ExamEnvironmentExamProjection {
         #[serde(rename = "_id")]
@@ -123,7 +123,8 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             start_time: DateTime,
         }
         // Get all attempts for this exam where the attempt id is not in the moderation collection
-        // TODO: Also, where the attempt was passed.
+        // TODO: Optimize by only creating moderation records for attempts that have passed
+        //       Does it matter if attempt was "cheated", but still failed?
         let mut attempts = attempt_collection
             .clone_with_type::<ExamEnvironmentExamAttemptProjection>()
             // _id must not be in existing exam attempts
@@ -133,7 +134,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                   "$nin": &exam_attempt_ids
               }
             })
-            .projection(doc! {"_id": true, "startTimeInMS": true, "startTime": true})
+            .projection(doc! {"_id": true, "startTime": true})
             .await
             .context("unable to find attempts")?;
 

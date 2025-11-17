@@ -8,10 +8,11 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 
 use prisma::{
-    CompletedChallenge, ExamEnvironmentChallenge, ExamEnvironmentConfig, ExamEnvironmentExam,
+    ExamEnvironmentChallenge, ExamEnvironmentConfig, ExamEnvironmentExam,
     ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
     ExamEnvironmentGeneratedExam,
 };
+use serde_json::json;
 
 use crate::{attempt::check_attempt_pass, config::EnvVars};
 
@@ -334,7 +335,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             continue;
         }
 
-        let completed_date = attempt.start_time.timestamp_millis().into();
+        let completed_date = attempt.start_time.timestamp_millis();
         let id = match exam_environment_challenges
             .iter()
             .find(|c| c.exam_id == attempt.exam_id)
@@ -349,21 +350,23 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
                 continue;
             }
         };
-        let completed_challenge = CompletedChallenge {
-            completed_date,
-            id,
-            challenge_type: Default::default(),
-            files: Default::default(),
-            github_link: Default::default(),
-            is_manually_approved: Default::default(),
-            solution: Default::default(),
-            exam_results: Default::default(),
-        };
+        let completed_challenge = json!({
+            "id": &id,
+            "completedDate": completed_date,
+            // TODO: This is brittle
+            "challengeType": Some(serde_json::json!(30)),
+        });
+
+        let completed_bson = mongodb::bson::serialize_to_bson(&completed_challenge)?;
 
         let namespace = Namespace::new("freecodecamp", "user");
-        updates.push(mongodb::options::UpdateOneModel::builder().namespace(namespace)
-            .filter(doc!{"_id": attempt.user_id, "completedChallenges.id": {"$ne": &completed_challenge.id}})
-            .update(doc!{"$push": {"completedChallenges": mongodb::bson::serialize_to_bson(&completed_challenge)?}}).build());
+        updates.push(
+            mongodb::options::UpdateOneModel::builder()
+                .namespace(namespace)
+                .filter(doc! {"_id": attempt.user_id, "completedChallenges.id": {"$ne": &id}})
+                .update(doc! {"$push": {"completedChallenges": &completed_bson}})
+                .build(),
+        );
     }
 
     if !updates.is_empty() {

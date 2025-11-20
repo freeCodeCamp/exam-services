@@ -405,7 +405,13 @@ pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result
         ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
     let delete_result = attempt_collection
         .delete_many(doc! {
-            "examId": practice_exam_id
+            "examId": practice_exam_id,
+            "startTime": {
+                // Long enough time for practice exam to expire
+                "$lt": DateTime::from_system_time(std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(1000)).context(
+                    "unable to construct system time"
+                )?)
+            }
         })
         .await
         .context("unable to delete practice exam attempts")?;

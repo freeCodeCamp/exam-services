@@ -41,7 +41,7 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'deploy.yml',
+              workflow_id: 'deploy.yaml',
               ref: 'main'
             })
             console.log(`Successfully triggered deploy workflow`)

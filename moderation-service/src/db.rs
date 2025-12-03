@@ -70,9 +70,16 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
     let mut attempts_cursor = attempt_collection
         .find(doc! {
-            "examModerationId": {
-                "$exists": false
-            }
+            "$or": [
+                {
+                    "examModerationId": {
+                        "$exists": false
+                    }
+                },
+                {
+                    "examModerationId": null
+                }
+            ]
         })
         .await?;
 

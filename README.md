@@ -10,33 +10,14 @@ docker compose up -d
 
 ## Deployment
 
-This project is deployed on a Digital Ocean Droplet.
+This project is deployed on the Digital Ocean App Platform as a Job on a schedule. The image is built using GitHub Actions, pushed to the Digital Ocean Container Registry, then the App Platform auto-deploys the new image.
 
-In the VM, set the environment variables, build the image(s), then move the `cron` file into the crontab:
+To deploy:
 
-```bash
-git clone https://github.com/freeCodeCamp/exam-services.git
-cd exam-services
-# Depending on the environment, add variables to .env.production or .env.staging
-cp moderation-service/sample.env moderation-service/.env.<environment>
-docker compose build
-crontab cron.<environment>
-```
-
-The VM has a 4GB Swap to enable local builds on 1GB machines.
-
-<details>
-  <summary>Swap Setup</summary>
-
-```bash
-sudo fallocate -l 4G /swapfile
-# Only root may use
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-```
-
-</details>
+1. manually run the `version-bump.yaml` GitHub Action workflow
+2. a pull request will be created
+3. approve the pull request
+4. the `auto-release.yaml` workflow will cause `deploy.yaml` to build and push to DOCR
 
 ## Moderation Service
 

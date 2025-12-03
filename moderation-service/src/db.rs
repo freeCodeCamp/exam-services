@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
@@ -8,8 +10,8 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 
 use prisma::{
-    ExamEnvironmentChallenge, ExamEnvironmentConfig, ExamEnvironmentExam,
-    ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
+    ExamEnvironmentChallenge, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
+    ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
     ExamEnvironmentGeneratedExam,
 };
 use serde_json::json;
@@ -66,115 +68,141 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
     let now = DateTime::now();
 
-    #[derive(Deserialize)]
-    struct ExamEnvironmentExamModerationProjection {
-        // #[serde(rename = "_id")]
-        // id: ObjectId,
-        #[serde(rename = "examAttemptId")]
-        exam_attempt_id: ObjectId,
-    }
+    let mut attempts_cursor = attempt_collection
+        .find(doc! {
+            "examModerationId": {
+                "$exists": false
+            }
+        })
+        .await?;
 
-    let moderation_records: Vec<ExamEnvironmentExamModerationProjection> = moderation_collection
-        .clone_with_type::<ExamEnvironmentExamModerationProjection>()
-        .find(doc! {})
-        .projection(doc! {"examAttemptId": true, "_id": true})
-        .await
-        .context("unable to find moderation records")?
-        .try_collect()
-        .await
-        .context("unable to deserialize moderation records to projection")?;
+    let mut exams = HashMap::new();
+    let mut generated_exams = HashMap::new();
+    let practice_exam_id =
+        ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
 
-    let exam_attempt_ids: Vec<ObjectId> = moderation_records
-        .iter()
-        .map(|r| r.exam_attempt_id)
-        .collect();
-    // For all expired attempts, create a moderation entry
-    // 1. Get all exams
-    // 2. Find all attempts where `(attempt.startTime + exam.config.totalTimeInS) < now`
-    #[derive(Deserialize)]
-    struct ExamEnvironmentExamProjection {
-        #[serde(rename = "_id")]
-        id: ObjectId,
-        config: ExamEnvironmentConfig,
-    }
-    let mut exams = exam_collection
-        .clone_with_type::<ExamEnvironmentExamProjection>()
-        .find(doc! {})
-        .projection(doc! {"_id": true, "config": true})
-        .await
-        .context("unable to find exams")?;
-    while let Some(exam) = exams.next().await {
-        let exam = exam.context("unable to deserialize exam projection")?;
+    while let Some(attempt) = attempts_cursor.next().await {
+        let attempt = attempt.context("unable to deserialize attempt to collection")?;
 
-        let practice_exam_id =
-            ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
-        if exam.id == practice_exam_id {
-            tracing::debug!("Skipping practice exam: {}", exam.id);
+        if attempt.exam_id == practice_exam_id {
+            tracing::debug!("Skipping practice exam: {}", attempt.exam_id);
             continue;
         }
 
+        let exam = if let Some(exam) = exams.get(&attempt.exam_id) {
+            exam
+        } else {
+            let exam = exam_collection
+                .find_one(doc! {"_id": &attempt.exam_id})
+                .await?
+                .context("unable to find exam for attempt")?;
+            exams.insert(attempt.exam_id, exam);
+            exams.get(&attempt.exam_id).unwrap()
+        };
+
         let total_time_in_ms = exam.config.total_time_in_s * 1000;
-        tracing::debug!("Checking exam: {}", exam.id);
+        let start_time_in_ms = attempt.start_time.timestamp_millis();
+        let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
+        let expired = expiry_time_in_ms < now.timestamp_millis();
 
-        #[derive(Deserialize)]
-        struct ExamEnvironmentExamAttemptProjection {
-            #[serde(rename = "_id")]
-            id: ObjectId,
-            #[serde(rename = "startTime")]
-            start_time: DateTime,
-        }
-        // Get all attempts for this exam where the attempt id is not in the moderation collection
-        // TODO: Optimize by only creating moderation records for attempts that have passed
-        //       Does it matter if attempt was "cheated", but still failed?
-        let mut attempts = attempt_collection
-            .clone_with_type::<ExamEnvironmentExamAttemptProjection>()
-            // _id must not be in existing exam attempts
-            .find(doc! {
-              "examId": exam.id,
-              "_id": {
-                  "$nin": &exam_attempt_ids
-              }
-            })
-            .projection(doc! {"_id": true, "startTime": true})
-            .await
-            .context("unable to find attempts")?;
+        tracing::debug!(
+            "Attempt {} expires at: {:?}",
+            attempt.id,
+            DateTime::from_millis(expiry_time_in_ms)
+        );
 
-        while let Some(attempt) = attempts.next().await {
-            let attempt = attempt.context("unable to deserialize attempt to collection")?;
-            let start_time_in_ms = attempt.start_time.timestamp_millis();
-            let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
-            let expired = expiry_time_in_ms < now.timestamp_millis();
+        let submission_date =
+            DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
-            tracing::debug!(
-                "Attempt {} expires at: {:?}",
-                attempt.id,
-                DateTime::from_millis(expiry_time_in_ms)
-            );
+        if expired {
+            // TEMPORARY: Check if moderation record already exists
+            //            Update attempt with moderation id.
+            let existing_moderation = moderation_collection
+                .find_one(doc! {
+                    "examAttemptId": &attempt.id
+                })
+                .await?;
+            if let Some(existing_moderation) = existing_moderation {
+                tracing::debug!(
+                    "Linking existing moderation {} to attempt {}",
+                    existing_moderation.id,
+                    attempt.id
+                );
+                attempt_collection
+                    .update_one(
+                        doc! {"_id": &attempt.id},
+                        doc! {
+                            "$set": {
+                                "examModerationId": existing_moderation.id
+                            }
+                        },
+                    )
+                    .await
+                    .context("unable to update attempt with existing moderation ID")?;
+                continue;
+            }
 
-            let submission_date =
-                DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
+            tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
+            let mut exam_moderation = ExamEnvironmentExamModeration {
+                id: ObjectId::new(),
+                exam_attempt_id: attempt.id,
+                moderator_id: None,
+                status: ExamEnvironmentExamModerationStatus::Pending,
+                feedback: None,
+                moderation_date: None,
+                submission_date,
+                challenges_awarded: false,
+                // TODO: This should not be set outside of prisma in `freeCodeCamp/freeCodeCamp/api`
+                version: 2,
+            };
 
-            if expired {
-                tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
-                let exam_moderation = ExamEnvironmentExamModeration {
-                    id: ObjectId::new(),
-                    exam_attempt_id: attempt.id,
-                    moderator_id: None,
-                    status: ExamEnvironmentExamModerationStatus::Pending,
-                    feedback: None,
-                    moderation_date: None,
-                    submission_date,
-                    challenges_awarded: false,
-                    // TODO: This should not be set outside of prisma in `freeCodeCamp/freeCodeCamp/api`
-                    version: 2,
+            let generated_exam =
+                if let Some(generated_exam) = generated_exams.get(&attempt.generated_exam_id) {
+                    generated_exam
+                } else {
+                    let generated_exam = get_collection::<ExamEnvironmentGeneratedExam>(
+                        &client,
+                        "ExamEnvironmentGeneratedExam",
+                    )
+                    .await
+                    .find_one(doc! {"_id": &attempt.generated_exam_id})
+                    .await?
+                    .context("unable to find generated exam for attempt")?;
+                    generated_exams.insert(attempt.generated_exam_id, generated_exam);
+                    generated_exams.get(&attempt.generated_exam_id).unwrap()
                 };
 
-                // Create a moderation entry
-                moderation_collection
-                    .insert_one(exam_moderation)
-                    .await
-                    .context("unable to insert moderation record")?;
+            // If attempt failed, auto-moderate as approved with feedback
+            let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
+            if !pass {
+                tracing::debug!(
+                    "Attempt {} failed, setting moderation to approved",
+                    attempt.id
+                );
+                exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
+                exam_moderation.moderation_date = Some(now);
+                exam_moderation.feedback = Some("Auto Approved - Failed attempt".to_string());
+                // Set to true to avoid another check for whether the attempt passed or not.
+                exam_moderation.challenges_awarded = true;
             }
+
+            // Create a moderation entry
+            moderation_collection
+                .insert_one(&exam_moderation)
+                .await
+                .context("unable to insert moderation record")?;
+            // Update the attempt to link to the moderation entry
+            attempt_collection
+                .update_one(
+                    doc! {"_id": &attempt.id},
+                    doc! {
+                        "$set": {
+                            "examModerationId": exam_moderation.id
+                        }
+                    },
+                )
+                .await
+                .context("unable to update attempt with moderation ID")?;
         }
     }
     Ok(())
@@ -225,7 +253,7 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
                     },
                     doc! {
                         "$set": {
-                            "feedback": "Auto Approved",
+                            "feedback": "Auto Approved - Moderation time exceeded",
                             "moderationDate": now,
                             "status": ExamEnvironmentExamModerationStatus::Approved
                         }

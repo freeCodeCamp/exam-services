@@ -194,7 +194,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             }
 
             // Create a moderation entry
-            moderation_collection
+            let res = moderation_collection
                 .insert_one(&exam_moderation)
                 .await
                 .context("unable to insert moderation record")?;
@@ -204,7 +204,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                     doc! {"_id": &attempt.id},
                     doc! {
                         "$set": {
-                            "examModerationId": exam_moderation.id
+                            "examModerationId": res.inserted_id
                         }
                     },
                 )

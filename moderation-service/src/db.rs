@@ -122,33 +122,6 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
         if expired {
-            // TEMPORARY: Check if moderation record already exists
-            //            Update attempt with moderation id.
-            let existing_moderation = moderation_collection
-                .find_one(doc! {
-                    "examAttemptId": &attempt.id
-                })
-                .await?;
-            if let Some(existing_moderation) = existing_moderation {
-                tracing::debug!(
-                    "Linking existing moderation {} to attempt {}",
-                    existing_moderation.id,
-                    attempt.id
-                );
-                attempt_collection
-                    .update_one(
-                        doc! {"_id": &attempt.id},
-                        doc! {
-                            "$set": {
-                                "examModerationId": existing_moderation.id
-                            }
-                        },
-                    )
-                    .await
-                    .context("unable to update attempt with existing moderation ID")?;
-                continue;
-            }
-
             tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
             let mut exam_moderation = ExamEnvironmentExamModeration {
                 id: ObjectId::new(),

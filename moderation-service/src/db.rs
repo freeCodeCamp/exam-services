@@ -15,7 +15,6 @@ use prisma::{
     ExamEnvironmentGeneratedExam,
 };
 use serde_json::json;
-use tracing::info;
 
 use crate::{attempt::check_attempt_pass, config::EnvVars};
 
@@ -429,98 +428,6 @@ pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result
         "Deleted {} practice exam attempts",
         delete_result.deleted_count
     );
-
-    Ok(())
-}
-
-/// Temporary task to sort out poorly created moderation record duplicates caused by upstream
-/// Fixed in upstream: https://github.com/freeCodeCamp/freeCodeCamp/pull/64635
-#[tracing::instrument(skip_all, err(Debug))]
-pub async fn temp_handle_duplicate_moderations(env_vars: &EnvVars) -> anyhow::Result<()> {
-    let client = client(&env_vars.mongodb_uri).await?;
-
-    let moderation_collection =
-        get_collection::<ExamEnvironmentExamModeration>(&client, "ExamEnvironmentExamModeration")
-            .await;
-
-    #[derive(Deserialize)]
-    struct DuplicateAgg {
-        _id: ObjectId,
-    }
-
-    // Aggregate on `examAttemptId` count
-    let duplicate_records: Vec<DuplicateAgg> = moderation_collection
-        .aggregate([
-            doc! {
-                "$group": {
-                    "_id": "$examAttemptId",
-                    "count": { "$sum": 1 }
-                }
-            },
-            doc! {
-                "$match": {
-                    "count": {
-                        "$gt": 1
-                    }
-                }
-            },
-        ])
-        .with_type::<DuplicateAgg>()
-        .await
-        .context("unable to run duplicate moderation record aggregation")?
-        .try_collect()
-        .await?;
-
-    for dup in duplicate_records {
-        info!(?dup._id,"handling duplicate records");
-        // Merge duplicates after getting them
-        // 1. Change feedback to "Auto Moderated - Invalid attempt submission"
-        // 2. Change status to "Denied"
-        // 3. Use oldest submissionDate
-        // 4. Set `challengesAwarded` to false
-        // 5. Set moderatorId to `null`
-        // 6. Set moderationDate to now
-        let dups: Vec<ExamEnvironmentExamModeration> = moderation_collection
-            .find(doc! {
-                "examAttemptId": dup._id
-            })
-            .await?
-            .try_collect()
-            .await?;
-
-        let mut updated_dup = ExamEnvironmentExamModeration {
-            id: ObjectId::new(),
-            status: ExamEnvironmentExamModerationStatus::Denied,
-            exam_attempt_id: dup._id,
-            feedback: Some("Auto Moderated - Invalid attempt submission".to_string()),
-            moderation_date: Some(DateTime::now()),
-            moderator_id: None,
-            submission_date: DateTime::now(),
-            challenges_awarded: true,
-            version: 2,
-        };
-
-        let mut ids_to_delete = vec![];
-        for dup in dups {
-            if dup.submission_date < updated_dup.submission_date {
-                updated_dup.submission_date = dup.submission_date;
-            }
-            ids_to_delete.push(dup.id);
-        }
-
-        let _res = moderation_collection.insert_one(updated_dup).await?;
-        info!(attempt_id = ?dup._id, "inserted updated moderation record");
-        let del_res = moderation_collection
-            .delete_many(doc! {
-                "_id": {
-                    "$in": &ids_to_delete
-                }
-            })
-            .await?;
-
-        assert_eq!(del_res.deleted_count, ids_to_delete.len() as u64);
-        info!(attempt_id = ?dup._id, "successfully deleted duplicate records");
-    }
 
     Ok(())
 }

@@ -7,7 +7,7 @@ use moderation_service::{
     config::EnvVars,
     db::{
         auto_approve_moderation_records, award_challenge_ids, delete_practice_exam_attempts,
-        temp_handle_duplicate_moderations, update_moderation_collection,
+        update_moderation_collection,
     },
 };
 use tracing::{error, info};
@@ -136,13 +136,6 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
             (
                 "award_challenge_ids",
                 Box::pin(async move { award_challenge_ids(&env).await }),
-            )
-        },
-        {
-            let env = env_vars.clone();
-            (
-                "temp_handle_duplicate_moderations",
-                Box::pin(async move { temp_handle_duplicate_moderations(&env).await }),
             )
         },
     ];

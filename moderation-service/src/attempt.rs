@@ -81,6 +81,13 @@ pub fn calculate_score(
                 &generated_question.answers,
                 &attempt_question.answers,
             ) {
+                let correct_exam_answer_ids: Vec<ObjectId> = exam_question
+                    .answers
+                    .iter()
+                    .filter_map(|a| if a.is_correct { Some(a.id) } else { None })
+                    .collect();
+                let selected_answer_ids = attempt_question.answers.clone();
+                assert!(correct_exam_answer_ids.contains(selected_answer_ids.get(0).unwrap()));
                 correct_questions += 1;
             }
         }
@@ -103,8 +110,9 @@ pub fn compare_answers(
         })
         .collect();
 
-    correct_generated_answers
+    let answers_equal = correct_generated_answers
         .iter()
-        .all(|&correct_answer| attempt_answers.contains(correct_answer))
-        && correct_generated_answers.len() == attempt_answers.len()
+        .all(|&correct_answer| attempt_answers.contains(correct_answer));
+
+    answers_equal && correct_generated_answers.len() == attempt_answers.len()
 }

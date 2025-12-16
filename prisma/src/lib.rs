@@ -62,6 +62,7 @@ impl Default for ExamEnvironmentExamAttempt {
             id: Default::default(),
             user_id: Default::default(),
             exam_id: Default::default(),
+            exam_moderation_id: Default::default(),
             generated_exam_id: Default::default(),
             question_sets: Default::default(),
             start_time: DateTime::now(),

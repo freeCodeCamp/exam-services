@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use futures_util::future::join_all;
 use moderation_service::{
     config::EnvVars,
     db::{
@@ -104,27 +103,15 @@ async fn main() {
     };
 }
 
-/// Runs all registered maintenance tasks concurrently.
+/// Runs all registered maintenance tasks synchronously. Order matters.
 /// To add a new task, just push a (name, future) pair into the `tasks` vector.
 async fn run_registered_tasks(env_vars: &EnvVars) {
-    type TaskFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
     // Clone env vars so each task owns its copy (allowing 'static futures)
+    type TaskFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+
     let tasks: Vec<(&'static str, TaskFuture)> = vec![
         {
-            let env = env_vars.clone();
-            (
-                "update_moderation_collection",
-                Box::pin(async move { update_moderation_collection(&env).await }),
-            )
-        },
-        {
-            let env = env_vars.clone();
-            (
-                "auto_approve_moderation_records",
-                Box::pin(async move { auto_approve_moderation_records(&env).await }),
-            )
-        },
-        {
+            // Delete practice exams attempts before other tasks to avoid unnecessary work
             let env = env_vars.clone();
             (
                 "delete_practice_exam_attempts",
@@ -132,29 +119,45 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
             )
         },
         {
+            // Update the moderation collection to represent current state of attempts before tasks altering moderations
             let env = env_vars.clone();
             (
-                "award_challenge_ids",
-                Box::pin(async move { award_challenge_ids(&env).await }),
+                "update_moderation_collection",
+                Box::pin(async move { update_moderation_collection(&env).await }),
             )
         },
         {
+            // Handle duplicate moderations which might have been caused by `update_moderation_collection`
             let env = env_vars.clone();
             (
                 "temp_handle_duplicate_moderations",
                 Box::pin(async move { temp_handle_duplicate_moderations(&env).await }),
             )
         },
+        {
+            // Approve old-enough moderations
+            let env = env_vars.clone();
+            (
+                "auto_approve_moderation_records",
+                Box::pin(async move { auto_approve_moderation_records(&env).await }),
+            )
+        },
+        {
+            // Handle challenge ids after moderations have been completely updated
+            let env = env_vars.clone();
+            (
+                "award_challenge_ids",
+                Box::pin(async move { award_challenge_ids(&env).await }),
+            )
+        },
     ];
 
-    let wrapped = tasks.into_iter().map(|(name, fut)| async move {
+    for (name, fut) in tasks {
         match fut.await {
             Ok(_) => info!("Task {name} completed"),
             Err(e) => error!("Task {name} failed: {e:?}"),
         }
-    });
-
-    join_all(wrapped).await;
+    }
 }
 
 // Tests are needed for schema changes

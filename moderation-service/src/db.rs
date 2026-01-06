@@ -15,8 +15,9 @@ use prisma::{
     ExamEnvironmentGeneratedExam,
 };
 use serde_json::json;
+use exam_utils::misc::check_attempt_pass;
 
-use crate::{attempt::check_attempt_pass, config::EnvVars};
+use crate::{config::EnvVars};
 
 const PRACTICE_EXAM_ID: &str = "674819431ed2e8ac8d170f5e";
 

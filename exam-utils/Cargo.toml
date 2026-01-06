@@ -1,0 +1,16 @@
+[package]
+name = "exam-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bson = { version = "3.1.0", features = ["serde", "serde_with-3"] }
+mongodb = { version = "3.4.1", features = ["bson-3"] }
+prisma = { path = "../prisma" }
+rand = "0.9.2"
+serde = "1.0.219"
+serde_json = "1"
+serde_with = "3.16.1"
+thiserror = "2.0.17"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

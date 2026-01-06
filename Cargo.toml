@@ -1,3 +1,4 @@
 [workspace]
-members = ["moderation-service", "prisma"]
+members = ["exam-utils", "moderation-service", "prisma"]
+exclude = ["script", "js-api"]
 resolver = "3"

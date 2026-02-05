@@ -584,9 +584,11 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
     let supabase_key = &env_vars.supabase_key;
     // let supabase = SupabaseClient::new(supabase_url, supabase_key)?;
     let client = postgrest::Postgrest::new(format!("{supabase_url}/rest/v1"))
-        .insert_header("apikey", supabase_key);
+        .insert_header("apikey", supabase_key)
+        .insert_header("Prefer", "return=representation");
 
     let expiry_date = chrono::Utc::now() - chrono::Duration::days(30);
+    tracing::info!(%expiry_date);
 
     let res = client
         .from("events")
@@ -597,7 +599,15 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
         .error_for_status()?;
 
     let text = res.text().await?;
-    tracing::info!(text);
+    let json: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
+    match json {
+        Ok(v) => {
+            tracing::info!("Deleted {} rows", v.len());
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, text, "unable to serialize response as json array");
+        }
+    };
 
     Ok(())
 }

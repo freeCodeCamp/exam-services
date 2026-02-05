@@ -1,0 +1,33 @@
+name: DOCR - Cleanup Container Images
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 0 * * 6" # 00:30 UTC on Saturdays
+
+jobs:
+  remove:
+    name: Delete Old Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repos:
+          - exam-services
+        variants:
+          - org
+
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry with short-lived credentials
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Delete Images
+        uses: raisedadead/action-docr-cleanup@1c7d87369bccfdf5da03a9ae3b00eacc3f2a9b51 # v1.1.1
+        with:
+          repository_name: "${{ matrix.variants }}/${{ matrix.repos }}"
+          days: "7"
+          keep_last: "2"

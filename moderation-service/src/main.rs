@@ -6,7 +6,7 @@ use moderation_service::{
     config::EnvVars,
     db::{
         auto_approve_moderation_records, award_challenge_ids, delete_practice_exam_attempts,
-        temp_handle_duplicate_moderations, update_moderation_collection,
+        delete_supabase_events, temp_handle_duplicate_moderations, update_moderation_collection,
     },
 };
 use tracing::{error, info};
@@ -27,6 +27,7 @@ async fn main() {
             // Capture everything else as a traditional structured log
             _ => sentry::integrations::tracing::EventFilter::Log,
         });
+
     tracing_subscriber::registry()
         .with(
             EnvFilter::try_from_default_env()
@@ -148,6 +149,14 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
             (
                 "award_challenge_ids",
                 Box::pin(async move { award_challenge_ids(&env).await }),
+            )
+        },
+        {
+            // Handle clean-up of old supabase events
+            let env = env_vars.clone();
+            (
+                "delete_supabase_events",
+                Box::pin(async move { delete_supabase_events(&env).await }),
             )
         },
     ];

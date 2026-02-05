@@ -4,10 +4,13 @@ use tracing::{error, warn};
 
 #[derive(Clone, Debug)]
 pub struct EnvVars {
-    pub sentry_dsn: Option<String>,
-    pub mongodb_uri: String,
-    pub moderation_length_in_s: Duration,
     pub environment: Environment,
+    pub moderation_length_in_s: Duration,
+    pub moderation_threshold: f64,
+    pub mongodb_uri: String,
+    pub sentry_dsn: Option<String>,
+    pub supabase_key: String,
+    pub supabase_url: String,
     pub timeout_secs: Option<u64>,
 }
 
@@ -90,6 +93,21 @@ impl EnvVars {
                 duration
             }
         };
+        let moderation_threshold = match var("MODERATION_THRESHOLD") {
+            Ok(v) => {
+                let num = match v.parse() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        panic!(
+                            "MODERATION_THRESHOLD should be between 0.0 and 1.0 inclusive: {:?}",
+                            e
+                        );
+                    }
+                };
+                num
+            }
+            Err(_e) => 0.25,
+        };
 
         let environment = match var("ENVIRONMENT") {
             Ok(v) => v.into(),
@@ -97,6 +115,16 @@ impl EnvVars {
                 warn!("ENVIRONMENT not set. Defaulting to 'production'.");
                 Environment::Production
             }
+        };
+
+        let Ok(supabase_url) = var("SUPABASE_URL") else {
+            error!("SUPABASE_URL not set");
+            panic!("SUPABASE_URL required");
+        };
+        assert!(!supabase_url.is_empty(), "SUPABASE_URL must not be empty");
+        let Ok(supabase_key) = var("SUPABASE_KEY") else {
+            error!("SUPABASE_KEY not set");
+            panic!("SUPABASE_KEY required");
         };
 
         // Optional timeout (in seconds) for the task to finish.
@@ -117,10 +145,13 @@ impl EnvVars {
         };
 
         let env_vars = Self {
+            environment,
+            moderation_length_in_s,
+            moderation_threshold,
             mongodb_uri,
             sentry_dsn,
-            moderation_length_in_s,
-            environment,
+            supabase_key,
+            supabase_url,
             timeout_secs,
         };
 

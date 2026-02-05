@@ -1,5 +1,8 @@
 use mongodb::bson::oid::ObjectId;
-use prisma;
+use prisma::{
+    self,
+    supabase::{Event, EventKind},
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -181,4 +184,190 @@ pub struct TimeToAnswer {
 
 pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
     todo!()
+}
+
+/// Calculates a 0.0 -> 1.0 score.
+///
+/// - A score of 0.0 means the attempt definitely does not need moderation.
+/// - A score of 1.0 means the attempt definitely does need moderation.
+pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> f64 {
+    // (1 / number of parts)
+    let weight = 0.25;
+    let mut moderation_score = 0.0;
+    let mut total_blur_time = 0.0;
+    let mut total_blur_time_before_last_answer = 0.0;
+
+    let mut events = events.clone();
+    events.sort_by(|a, b| (a.timestamp).cmp(&b.timestamp));
+
+    let last_submission_time = attempt
+        .question_sets
+        .iter()
+        .flat_map(|qs| qs.questions.iter().flat_map(|q| q.submission_time))
+        .max();
+
+    let last_submission_time = match last_submission_time {
+        Some(last_submission_time) => last_submission_time,
+        None => {
+            // Theoretically, this should be impossible -> function currently only called if attempt passes
+            tracing::warn!(attempt = %attempt.id, "attempt did not submit any answers");
+            return moderation_score;
+        }
+    };
+
+    let mut previous_blur_time = None;
+    for event in events {
+        let timestamp = event.timestamp;
+        match event.kind {
+            EventKind::Blur => {
+                previous_blur_time = Some(timestamp);
+            }
+            EventKind::Focus => {
+                if let Some(previous_blur_time) = previous_blur_time {
+                    let blur_time = (timestamp - previous_blur_time).as_seconds_f64();
+                    total_blur_time += blur_time;
+
+                    if timestamp.timestamp_millis() < last_submission_time.timestamp_millis() {
+                        total_blur_time_before_last_answer += blur_time;
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    // Time taken to answer all questions -> does not include checking over answers / waiting before exiting
+    let total_time_taken = last_submission_time
+        .saturating_duration_since(attempt.start_time)
+        .as_secs_f64();
+
+    let total_time = attempt.config.total_time_in_s as f64;
+
+    assert!(
+        total_time_taken <= total_time,
+        "{total_time_taken} <= {total_time}"
+    );
+    assert!(
+        total_blur_time <= total_time,
+        "{total_blur_time} <= {total_time}"
+    );
+    assert!(
+        total_blur_time_before_last_answer <= total_blur_time,
+        "{total_blur_time_before_last_answer} <= {total_blur_time}"
+    );
+
+    let time_weight = ((total_time - total_time_taken) / total_time) * weight;
+    assert!(time_weight <= weight, "{time_weight} <= {}", weight);
+    moderation_score += time_weight;
+
+    // Blur time after last submission is worth 1/3 as much as before last submission
+    // Seeing as both total_blur_time_* vars include the time before, it is counted 'twice'
+    let blur_weight = (total_blur_time / total_time) * weight;
+    assert!(blur_weight <= weight, "{blur_weight} <= {weight}");
+    moderation_score += blur_weight;
+
+    assert!(
+        total_blur_time_before_last_answer <= total_time_taken,
+        "{total_blur_time_before_last_answer} <= {total_time_taken}"
+    );
+    let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
+    assert!(
+        blur_before_weight <= weight * 2.0,
+        "{blur_before_weight} <= {}",
+        weight * 2.0
+    );
+    moderation_score += blur_before_weight;
+
+    if moderation_score > 1.0 {
+        tracing::error!(
+            attempt = %attempt.id,
+            moderation_score,
+            "moderation score should never be > 1.0"
+        );
+    }
+
+    moderation_score
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64;
+
+    use bson::oid::ObjectId;
+    use prisma::{
+        ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentGeneratedExam,
+        supabase::Event,
+    };
+
+    use crate::attempt::{construct_attempt, get_moderation_score};
+
+    fn get_events_for_attempt(attempt_id: &ObjectId) -> Vec<Event> {
+        let event = std::fs::read(format!("../fixtures/events/{}", attempt_id.to_hex())).unwrap();
+
+        let events: Vec<Event> = serde_json::from_slice(&event).unwrap();
+        events
+    }
+
+    fn get_attempts() -> Vec<ExamEnvironmentExamAttempt> {
+        let attempts_dir = std::fs::read_dir("../fixtures/attempt").unwrap();
+
+        let mut attempts = vec![];
+        for f in attempts_dir {
+            let attempt = std::fs::read(f.unwrap().path()).unwrap();
+            let attempt: ExamEnvironmentExamAttempt = serde_json::from_slice(&attempt).unwrap();
+            attempts.push(attempt);
+        }
+
+        attempts
+    }
+
+    fn get_exam_by_id(exam_id: &ObjectId) -> ExamEnvironmentExam {
+        let exam = std::fs::read(format!("../fixtures/exam/{}", exam_id.to_hex())).unwrap();
+
+        let exam = serde_json::from_slice(&exam).unwrap();
+        exam
+    }
+
+    fn get_generation_by_id(generation_id: &ObjectId) -> ExamEnvironmentGeneratedExam {
+        let f =
+            std::fs::read(format!("../fixtures/generation/{}", generation_id.to_hex())).unwrap();
+
+        let x = serde_json::from_slice(&f).unwrap();
+        x
+    }
+
+    #[test]
+    fn moderation_score() {
+        let attempts = get_attempts();
+
+        let mut scores = vec![];
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
+        for attempt in attempts {
+            let exam = get_exam_by_id(&attempt.exam_id);
+            let generation = get_generation_by_id(&attempt.generated_exam_id);
+            let events = get_events_for_attempt(&attempt.id);
+
+            let attempt = construct_attempt(&exam, &generation, &attempt);
+
+            let score = get_moderation_score(&attempt, &events);
+
+            if score < min {
+                min = score;
+            }
+            if score > max {
+                max = score;
+            }
+
+            scores.push(format!("{:.3}", score));
+        }
+
+        println!("{:#?}", scores);
+
+        dbg!(min, max);
+
+        assert!(max <= 1.0);
+        assert!(min >= 0.0);
+    }
 }

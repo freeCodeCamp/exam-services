@@ -9,15 +9,19 @@ use mongodb::{
 };
 use serde::{Deserialize, Serialize};
 
+use exam_utils::{
+    attempt::{construct_attempt, get_moderation_score},
+    misc::check_attempt_pass,
+};
 use prisma::{
     ExamEnvironmentChallenge, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
     ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
-    ExamEnvironmentGeneratedExam,
+    ExamEnvironmentGeneratedExam, supabase::Event,
 };
 use serde_json::json;
-use exam_utils::misc::check_attempt_pass;
+use supabase_rs::SupabaseClient;
 
-use crate::{config::EnvVars};
+use crate::config::EnvVars;
 
 const PRACTICE_EXAM_ID: &str = "674819431ed2e8ac8d170f5e";
 
@@ -66,6 +70,13 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         get_collection::<ExamEnvironmentExamAttempt>(&client, "ExamEnvironmentExamAttempt").await;
     let exam_collection =
         get_collection::<ExamEnvironmentExam>(&client, "ExamEnvironmentExam").await;
+    let generation_collection =
+        get_collection::<ExamEnvironmentGeneratedExam>(&client, "ExamEnvironmentGeneratedExam")
+            .await;
+
+    let supabase_url = &env_vars.supabase_url;
+    let supabase_key = &env_vars.supabase_key;
+    let supabase = SupabaseClient::new(supabase_url, supabase_key)?;
 
     let now = DateTime::now();
 
@@ -141,16 +152,12 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 if let Some(generated_exam) = generated_exams.get(&attempt.generated_exam_id) {
                     generated_exam
                 } else {
-                    let generated_exam = get_collection::<ExamEnvironmentGeneratedExam>(
-                        &client,
-                        "ExamEnvironmentGeneratedExam",
-                    )
-                    .await
-                    .find_one(doc! {"_id": &attempt.generated_exam_id})
-                    .await?
-                    .context("unable to find generated exam for attempt")?;
-                    generated_exams.insert(attempt.generated_exam_id, generated_exam);
-                    generated_exams.get(&attempt.generated_exam_id).unwrap()
+                    let generated_exam = generation_collection
+                        .find_one(doc! {"_id": &attempt.generated_exam_id})
+                        .await?
+                        .context("unable to find generated exam for attempt")?;
+                    generated_exams.insert(attempt.generated_exam_id, generated_exam.clone());
+                    &generated_exam.clone()
                 };
 
             // If attempt failed, auto-moderate as approved with feedback
@@ -165,6 +172,24 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 exam_moderation.feedback = Some("Auto Approved - Failed attempt".to_string());
                 // Set to true to avoid another check for whether the attempt passed or not.
                 exam_moderation.challenges_awarded = true;
+            } else {
+                let events = get_events_for_attempt(&supabase, &attempt.id).await?;
+
+                let attempt = construct_attempt(&exam, &generated_exam, &attempt);
+                let moderation_score = get_moderation_score(&attempt, &events);
+                tracing::debug!(moderation_score, attempt = %attempt.id);
+
+                if moderation_score < env_vars.moderation_threshold {
+                    exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
+                    exam_moderation.moderation_date = Some(now);
+                    exam_moderation.feedback = Some(format!(
+                        "Auto Approved - Moderation score: {moderation_score}"
+                    ));
+                    exam_moderation.challenges_awarded = true;
+                } else {
+                    exam_moderation.feedback =
+                        Some(format!("Moderation score: {moderation_score}"));
+                }
             }
 
             // Create a moderation entry
@@ -187,6 +212,32 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         }
     }
     Ok(())
+}
+
+#[tracing::instrument(skip_all, err(Debug))]
+async fn get_events_for_attempt(
+    supabase: &SupabaseClient,
+    attempt_id: &ObjectId,
+) -> anyhow::Result<Vec<Event>> {
+    let events = supabase
+        .from("events")
+        .eq("attempt_id", &attempt_id.to_hex())
+        .execute()
+        .await
+        .map_err(anyhow::Error::msg)
+        .context("unable to get examts for attempt")?;
+
+    let events: Vec<Event> = events
+        .into_iter()
+        .filter_map(|event| match serde_json::from_value(event) {
+            Ok(event) => Some(event),
+            Err(e) => {
+                tracing::warn!(error = ?e, "unable to deserialize event");
+                None
+            }
+        })
+        .collect();
+    Ok(events)
 }
 
 /// Auto approves old, unmoderated moderation records
@@ -522,6 +573,31 @@ pub async fn temp_handle_duplicate_moderations(env_vars: &EnvVars) -> anyhow::Re
         assert_eq!(del_res.deleted_count, ids_to_delete.len() as u64);
         tracing::info!(attempt_id = ?dup._id, "successfully deleted duplicate records");
     }
+
+    Ok(())
+}
+
+/// Delete Supabase events older than 30 days
+#[tracing::instrument(skip_all, err(Debug))]
+pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
+    let supabase_url = &env_vars.supabase_url;
+    let supabase_key = &env_vars.supabase_key;
+    // let supabase = SupabaseClient::new(supabase_url, supabase_key)?;
+    let client = postgrest::Postgrest::new(format!("{supabase_url}/rest/v1"))
+        .insert_header("apikey", supabase_key);
+
+    let expiry_date = chrono::Utc::now() - chrono::Duration::days(30);
+
+    let res = client
+        .from("events")
+        .lt("timestamp", &expiry_date.to_rfc3339())
+        .delete()
+        .execute()
+        .await?
+        .error_for_status()?;
+
+    let text = res.text().await?;
+    tracing::info!(text);
 
     Ok(())
 }

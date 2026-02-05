@@ -3,6 +3,8 @@ use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+pub mod supabase;
+
 prisma_rust_schema::import_types!(
     schema_paths = [
         "https://raw.githubusercontent.com/freeCodeCamp/freeCodeCamp/main/api/prisma/schema.prisma",

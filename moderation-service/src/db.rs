@@ -185,7 +185,6 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                     exam_moderation.feedback = Some(format!(
                         "Auto Approved - Moderation score: {moderation_score}"
                     ));
-                    exam_moderation.challenges_awarded = true;
                 } else {
                     exam_moderation.feedback =
                         Some(format!("Moderation score: {moderation_score}"));

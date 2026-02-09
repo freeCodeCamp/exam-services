@@ -173,9 +173,10 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
 #[cfg(test)]
 mod tests {
     use futures_util::TryStreamExt;
-    use moderation_service::db;
     use mongodb::bson::doc;
-    use prisma::{ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration};
+    use prisma::{
+        ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentExamModeration, db,
+    };
 
     fn setup() {
         dotenvy::dotenv().ok();

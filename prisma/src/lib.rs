@@ -1,8 +1,9 @@
-use bson::{Bson, DateTime, oid::ObjectId};
+use mongodb::bson::{self, Bson, DateTime, oid::ObjectId};
 use prisma_rust_schema;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+pub mod db;
 pub mod supabase;
 
 prisma_rust_schema::import_types!(

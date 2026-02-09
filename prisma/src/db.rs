@@ -23,7 +23,7 @@ where
 pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
     let mut client_options = ClientOptions::parse(uri).await?;
 
-    client_options.app_name = Some("exam-services-script".to_string());
+    client_options.app_name = Some(env!("CARGO_CRATE_NAME").to_string());
 
     // Get a handle to the cluster
     let client = Client::with_options(client_options)?;
@@ -37,13 +37,6 @@ pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
         .await?;
 
     Ok(client)
-}
-
-pub fn err<E>(s: &str) -> impl FnOnce(E) -> String
-where
-    E: ToString,
-{
-    return move |e: E| format!("{}: {}", s, e.to_string());
 }
 
 #[instrument(skip_all, fields(collection = collection.name(), query = query.to_string()))]

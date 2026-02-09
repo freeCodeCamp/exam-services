@@ -1643,13 +1643,16 @@ dependencies = [
 
 [[package]]
 name = "prisma"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
- "bson 3.1.0",
  "chrono",
+ "futures-util",
+ "mongodb",
  "prisma-rust-schema",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
 // #![allow(incomplete_features)]
 // #![feature(async_drop)]
 use futures_util::TryStreamExt;
-use moderation_service::{config::EnvVars, db};
+use moderation_service::{config::EnvVars, db::update_moderation_collection};
 // use mongo_drop::MongoDrop;
 use mongodb::bson::{doc, oid::ObjectId};
-use prisma;
+use prisma::*;
 /// Add exam data, add attempt data, call function, check if moderation record is created
 /// Call again, ensure no more records are created
 /// Add new attempt
@@ -76,7 +76,7 @@ async fn moderation_record_is_created() {
     let mut env_vars = EnvVars::new();
 
     // Should create two moderation records
-    let _ = db::update_moderation_collection(&env_vars).await.unwrap();
+    let _ = update_moderation_collection(&env_vars).await.unwrap();
 
     let moderation_records: Vec<prisma::ExamEnvironmentExamModeration> = moderation_collection
         .find(doc! {})
@@ -115,7 +115,7 @@ async fn moderation_record_is_created() {
     assert!(record_2.submission_date.timestamp_millis() > test_start_date.timestamp_millis());
 
     // Should not create any more moderation records
-    let _ = db::update_moderation_collection(&env_vars).await.unwrap();
+    let _ = update_moderation_collection(&env_vars).await.unwrap();
     let moderation_records_without_change: Vec<prisma::ExamEnvironmentExamModeration> =
         moderation_collection
             .find(doc! {})
@@ -141,7 +141,7 @@ async fn moderation_record_is_created() {
     let test_start_date = mongodb::bson::DateTime::now();
 
     // Should add one more moderation record
-    let _ = db::update_moderation_collection(&env_vars).await.unwrap();
+    let _ = update_moderation_collection(&env_vars).await.unwrap();
     let moderation_record: prisma::ExamEnvironmentExamModeration = moderation_collection
         .find_one(doc! {
             "examAttemptId": attempt_3.id
@@ -167,7 +167,7 @@ async fn moderation_record_is_created() {
     // Ensure at least 1 second has passed
     tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
 
-    let _ = db::update_moderation_collection(&env_vars).await.unwrap();
+    let _ = update_moderation_collection(&env_vars).await.unwrap();
     let moderation_records: Vec<prisma::ExamEnvironmentExamModeration> = moderation_collection
         .find(doc! {})
         .await

@@ -10,7 +10,7 @@ use mongodb::{
 use serde_json::{Value, json};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::util::{err, get_collection, get_from_cache_or_collection};
+use prisma::db::{get_collection, get_from_cache_or_collection};
 
 /// Finds all approved moderations with `challengesAwarded: true`
 /// Gets matching attempt
@@ -272,4 +272,11 @@ pub async fn ensure_awarded_challenges(client: Client) -> Result<(), String> {
     println!("Number of attempts already handled: {num_attempts_not_need_fixing}");
 
     Ok(())
+}
+
+fn err<E>(s: &str) -> impl FnOnce(E) -> String
+where
+    E: ToString,
+{
+    return move |e: E| format!("{}: {}", s, e.to_string());
 }

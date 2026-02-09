@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use anyhow::Context;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
-    Client, Collection, Namespace,
+    Namespace,
     bson::{DateTime, doc, oid::ObjectId},
-    options::ClientOptions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +15,7 @@ use exam_utils::{
 use prisma::{
     ExamEnvironmentChallenge, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
     ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
-    ExamEnvironmentGeneratedExam, supabase::Event,
+    ExamEnvironmentGeneratedExam, db::*, supabase::Event,
 };
 use serde_json::json;
 use supabase_rs::SupabaseClient;
@@ -24,37 +23,6 @@ use supabase_rs::SupabaseClient;
 use crate::config::EnvVars;
 
 const PRACTICE_EXAM_ID: &str = "674819431ed2e8ac8d170f5e";
-
-pub async fn get_collection<'d, T>(client: &Client, collection_name: &str) -> Collection<T>
-where
-    T: Send + Sync + Deserialize<'d> + Serialize,
-{
-    let db = client
-        .default_database()
-        .expect("database needs to be defined in the URI");
-
-    let collection = db.collection::<T>(collection_name);
-    collection
-}
-
-pub async fn client(uri: &str) -> mongodb::error::Result<Client> {
-    let mut client_options = ClientOptions::parse(uri).await?;
-
-    client_options.app_name = Some("exam-moderation-service".to_string());
-
-    // Get a handle to the cluster
-    let client = Client::with_options(client_options)?;
-
-    // Ping the server to see if you can connect to the cluster
-    client
-        .default_database()
-        .expect("database needs to be defined in the URI")
-        // .database("freecodecamp")
-        .run_command(doc! {"ping": 1})
-        .await?;
-
-    Ok(client)
-}
 
 /// Auto approves old, unmoderated moderation records
 /// Creates moderation records for attempts not already in the queue

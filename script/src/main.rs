@@ -1,10 +1,9 @@
+use prisma::db::client;
 use tracing::error;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod award_challenges_from_date;
-mod util;
 use award_challenges_from_date::award_challenges_from_date;
-use util::client;
 
 #[tokio::main]
 async fn main() {

@@ -5,12 +5,10 @@ use mongodb::{
     Client, Namespace,
     bson::{self, doc, oid::ObjectId},
 };
-use prisma::*;
+use prisma::{db::get_collection, *};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{info, warn};
-
-use crate::util::get_collection;
 
 /// Finds all approved moderations between set dates `gt` and `lt`
 /// Gets matching attempt

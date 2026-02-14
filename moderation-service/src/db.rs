@@ -72,7 +72,10 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         let attempt = attempt.context("unable to deserialize attempt to collection")?;
 
         if attempt.exam_id == practice_exam_id {
-            tracing::debug!("Skipping practice exam: {}", attempt.exam_id);
+            tracing::debug!(
+                exam = %attempt.exam_id,
+                "skipping practice exam"
+            );
             continue;
         }
 
@@ -93,16 +96,19 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         let expired = expiry_time_in_ms < now.timestamp_millis();
 
         tracing::debug!(
-            "Attempt {} expires at: {:?}",
-            attempt.id,
-            DateTime::from_millis(expiry_time_in_ms)
+            attempt = %attempt.id,
+            time = %DateTime::from_millis(expiry_time_in_ms),
+            "attempt expiry",
         );
 
         let submission_date =
             DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
         if expired {
-            tracing::debug!("Creating moderation entry for attempt: {}", attempt.id);
+            tracing::debug!(
+            attempt = %attempt.id,
+                "creating moderation entry for attempt"
+            );
             let mut exam_moderation = ExamEnvironmentExamModeration {
                 id: ObjectId::new(),
                 exam_attempt_id: attempt.id,
@@ -132,8 +138,8 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
             if !pass {
                 tracing::debug!(
-                    "Attempt {} failed, setting moderation to approved",
-                    attempt.id
+                    attempt = %attempt.id,
+                    "attempt failed, setting moderation to approved",
                 );
                 exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
                 exam_moderation.moderation_date = Some(now);
@@ -242,9 +248,9 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
     for moderation in moderation_records.iter() {
         let submission_date = moderation.submission_date;
         let expiry_date = submission_date.saturating_add_duration(env_vars.moderation_length_in_s);
-        tracing::debug!("Moderation {} expires at {}", moderation.id, expiry_date);
+        tracing::debug!(moderation = %moderation.id, %expiry_date, "moderation expiry", );
         if now > expiry_date {
-            tracing::info!("Moderation {} auto-moderated", moderation.id);
+            tracing::info!(moderation = %moderation.id, "moderation auto-moderated");
             moderation_collection
                 .update_one(
                     doc! {
@@ -319,7 +325,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         .map(|a| a.generated_exam_id)
         .collect::<std::collections::HashSet<_>>();
 
-    tracing::debug!("Unique exam IDs: {:?}", unique_exam_ids);
+    tracing::debug!(?unique_exam_ids);
 
     let exam_environment_challenges: Vec<ExamEnvironmentChallenge> =
         exam_environment_challenge_collection
@@ -354,8 +360,8 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
 
         tracing::debug!(
-            attempt_id = attempt.id.to_hex(),
-            exam_id = attempt.exam_id.to_hex(),
+            attempt_id = %attempt.id,
+            exam_id = %attempt.exam_id,
             "Attempt passed: {pass}"
         );
         if !pass {
@@ -370,8 +376,8 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             Some(challenge) => challenge.challenge_id.to_hex(),
             None => {
                 tracing::warn!(
-                    user_id = attempt.user_id.to_hex(),
-                    exam_id = attempt.exam_id.to_hex(),
+                    user_id = %attempt.user_id,
+                    exam_id = %attempt.exam_id,
                     "No challenge found to award user"
                 );
                 continue;
@@ -400,8 +406,8 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         let res = user_collection.client().bulk_write(updates).await?;
 
         tracing::info!(
-            "Updated {} users with new challenge IDs",
-            res.modified_count
+            num = res.modified_count,
+            "updated users with new challenge IDs",
         );
     }
 
@@ -414,8 +420,8 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         .await
         .context("unable to update moderation records to set challengesAwarded to true")?;
     tracing::info!(
-        "Updated {} moderation records to set challengesAwarded to true",
-        update_result.modified_count
+        num = update_result.modified_count,
+        "updated moderation records to set challengesAwarded to true",
     );
 
     Ok(())
@@ -444,8 +450,8 @@ pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result
     .context("unable to delete practice exam attempts")?;
 
     tracing::info!(
-        "Deleted {} practice exam attempts",
-        delete_result.deleted_count
+        num = delete_result.deleted_count,
+        "deleted practice exam attempts",
     );
 
     Ok(())
@@ -528,7 +534,7 @@ pub async fn temp_handle_duplicate_moderations(env_vars: &EnvVars) -> anyhow::Re
         }
 
         let _res = moderation_collection.insert_one(updated_dup).await?;
-        tracing::info!(attempt_id = ?dup._id, "inserted updated moderation record");
+        tracing::info!(attempt_id = %dup._id, "inserted updated moderation record");
         let del_res = moderation_collection
             .delete_many(doc! {
                 "_id": {
@@ -538,7 +544,7 @@ pub async fn temp_handle_duplicate_moderations(env_vars: &EnvVars) -> anyhow::Re
             .await?;
 
         assert_eq!(del_res.deleted_count, ids_to_delete.len() as u64);
-        tracing::info!(attempt_id = ?dup._id, "successfully deleted duplicate records");
+        tracing::info!(attempt_id = %dup._id, "successfully deleted duplicate records");
     }
 
     Ok(())
@@ -569,7 +575,7 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
     let json: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
     match json {
         Ok(v) => {
-            tracing::info!("Deleted {} rows", v.len());
+            tracing::info!(num = v.len(), "deleted supabase rows");
         }
         Err(e) => {
             tracing::warn!(error = %e, text, "unable to serialize response as json array");

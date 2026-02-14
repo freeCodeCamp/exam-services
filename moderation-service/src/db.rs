@@ -150,25 +150,27 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 let events = get_events_for_attempt(&supabase, &attempt.id).await?;
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
-                let moderation_score = match get_moderation_score(&attempt, &events) {
-                    Ok(s) => s,
+                match get_moderation_score(&attempt, &events) {
+                    Ok(moderation_score) => {
+                        tracing::debug!(moderation_score, attempt = %attempt.id);
+
+                        if moderation_score < env_vars.moderation_threshold {
+                            exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
+                            exam_moderation.moderation_date = Some(now);
+                            exam_moderation.feedback = Some(format!(
+                                "Auto Approved - Moderation score: {moderation_score}"
+                            ));
+                        } else {
+                            exam_moderation.feedback =
+                                Some(format!("Moderation score: {moderation_score}"));
+                        }
+                    }
                     Err(e) => {
                         tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
-                        continue;
+                        exam_moderation.feedback =
+                            Some(format!("Moderation score calculation error."));
                     }
                 };
-                tracing::debug!(moderation_score, attempt = %attempt.id);
-
-                if moderation_score < env_vars.moderation_threshold {
-                    exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
-                    exam_moderation.moderation_date = Some(now);
-                    exam_moderation.feedback = Some(format!(
-                        "Auto Approved - Moderation score: {moderation_score}"
-                    ));
-                } else {
-                    exam_moderation.feedback =
-                        Some(format!("Moderation score: {moderation_score}"));
-                }
             }
 
             // Create a moderation entry

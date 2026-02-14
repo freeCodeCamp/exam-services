@@ -1,12 +1,10 @@
 # Exam Services
 
-```bash
-cd moderation-service && cp sample.env .env
-```
-
-```bash
-docker compose up -d
-```
+- `exam-utils/`: useful utility functions working on exam data types
+- `js-api/`: wasm bindings for `exam-utils`
+- `moderation-service/`: tasks to manage exam attempts
+- `prisma/`: prisma schema Rust export
+- `script/`: assortment of past, once-off scripts interacting with the database
 
 ## Deployment
 
@@ -14,17 +12,15 @@ This project is deployed on the Digital Ocean App Platform as a Job on a schedul
 
 To deploy:
 
-1. manually run the `version-bump.yaml` GitHub Action workflow
-2. a pull request will be created
-3. approve the pull request
-4. the `auto-release.yaml` workflow will cause `deploy.yaml` to build and push to DOCR
+1. manually bump the version(s) of the changed package(s)
+2. run the `deploy.yaml` to build and push to DOCR
 
 ## Moderation Service
 
 ### Development
 
 ```bash
-docker compose up -d moderation
+docker build . --file ./moderation-service/Dockerfile
 ```
 
 ### Testing
@@ -40,4 +36,11 @@ A specific version of `rustc` is used, because the test tooling requires nightly
 
 ```bash
 cargo +nightly-2025-04-03 test
+```
+
+## Script
+
+```bash
+cd script/
+cargo run
 ```

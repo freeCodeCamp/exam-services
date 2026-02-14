@@ -1,6 +1,6 @@
 [package]
 name = "exam-utils"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 
 [dependencies]
@@ -13,4 +13,3 @@ serde_json = "1"
 serde_with = "3.16.1"
 thiserror = "2.0.17"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

@@ -4,6 +4,8 @@ pub enum Error {
     Generation(String),
     #[error("{0}")]
     InvalidConfig(String),
+    #[error("{0}")]
+    ModerationScore(String),
     // Froms
     #[error("{0}")]
     MongoDB(#[from] mongodb::error::Error),

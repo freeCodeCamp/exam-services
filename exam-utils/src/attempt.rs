@@ -6,6 +6,8 @@ use prisma::{
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::error::Error;
+
 pub fn get_time_between_submissions(_attempt: prisma::ExamEnvironmentExamAttempt) -> Vec<Duration> {
     todo!()
 }
@@ -188,9 +190,9 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 
 /// Calculates a 0.0 -> 1.0 score.
 ///
-/// - A score of 0.0 means the attempt definitely does not need moderation.
+/// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
-pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> f64 {
+pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
     // (1 / number of parts)
     let weight = 0.25;
     let mut moderation_score = 0.0;
@@ -211,7 +213,7 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> f64 {
         None => {
             // Theoretically, this should be impossible -> function currently only called if attempt passes
             tracing::warn!(attempt = %attempt.id, "attempt did not submit any answers");
-            return moderation_score;
+            return Ok(moderation_score);
         }
     };
 
@@ -244,39 +246,54 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> f64 {
 
     let total_time = attempt.config.total_time_in_s as f64;
 
-    assert!(
-        total_time_taken <= total_time,
-        "{total_time_taken} <= {total_time}"
-    );
-    assert!(
-        total_blur_time <= total_time,
-        "{total_blur_time} <= {total_time}"
-    );
-    assert!(
-        total_blur_time_before_last_answer <= total_blur_time,
-        "{total_blur_time_before_last_answer} <= {total_blur_time}"
-    );
+    if total_time_taken > total_time {
+        return Err(Error::ModerationScore(format!(
+            "total time taken > than total time: {} > {}",
+            total_time_taken, total_time
+        )));
+    }
+    if total_blur_time > total_time {
+        return Err(Error::ModerationScore(format!(
+            "total blur time > total time: {total_blur_time} > {total_time}"
+        )));
+    }
+    if total_blur_time_before_last_answer > total_blur_time {
+        return Err(Error::ModerationScore(format!(
+            "total blur time before last answer > total blur time: {total_blur_time_before_last_answer} > {total_blur_time}"
+        )));
+    }
 
     let time_weight = ((total_time - total_time_taken) / total_time) * weight;
-    assert!(time_weight <= weight, "{time_weight} <= {}", weight);
+    if time_weight > weight {
+        return Err(Error::ModerationScore(format!(
+            "time weight > weight: {time_weight} > {weight}"
+        )));
+    }
     moderation_score += time_weight;
 
     // Blur time after last submission is worth 1/3 as much as before last submission
     // Seeing as both total_blur_time_* vars include the time before, it is counted 'twice'
     let blur_weight = (total_blur_time / total_time) * weight;
-    assert!(blur_weight <= weight, "{blur_weight} <= {weight}");
+    if blur_weight > weight {
+        return Err(Error::ModerationScore(format!(
+            "blur weight > weight: {blur_weight} > {weight}"
+        )));
+    }
     moderation_score += blur_weight;
 
-    assert!(
-        total_blur_time_before_last_answer <= total_time_taken,
-        "{total_blur_time_before_last_answer} <= {total_time_taken}"
-    );
+    if total_blur_time_before_last_answer > total_time_taken {
+        return Err(Error::ModerationScore(format!(
+            "total blur time before last answer > total time taken: {total_blur_time_before_last_answer} > {total_time_taken}"
+        )));
+    }
+
     let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
-    assert!(
-        blur_before_weight <= weight * 2.0,
-        "{blur_before_weight} <= {}",
-        weight * 2.0
-    );
+    if blur_before_weight > weight * 2.0 {
+        return Err(Error::ModerationScore(format!(
+            "blur before weight > weight: {blur_before_weight} > {}",
+            weight * 2.0
+        )));
+    }
     moderation_score += blur_before_weight;
 
     if moderation_score > 1.0 {
@@ -287,7 +304,7 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> f64 {
         );
     }
 
-    moderation_score
+    Ok(moderation_score)
 }
 
 #[cfg(test)]
@@ -351,7 +368,7 @@ mod tests {
 
             let attempt = construct_attempt(&exam, &generation, &attempt);
 
-            let score = get_moderation_score(&attempt, &events);
+            let score = get_moderation_score(&attempt, &events).unwrap();
 
             if score < min {
                 min = score;

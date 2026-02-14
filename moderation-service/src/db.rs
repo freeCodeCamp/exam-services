@@ -144,7 +144,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 let events = get_events_for_attempt(&supabase, &attempt.id).await?;
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
-                let moderation_score = get_moderation_score(&attempt, &events);
+                let moderation_score = get_moderation_score(&attempt, &events)?;
                 tracing::debug!(moderation_score, attempt = %attempt.id);
 
                 if moderation_score < env_vars.moderation_threshold {

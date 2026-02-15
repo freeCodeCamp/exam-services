@@ -1,5 +1,9 @@
 # Exam Services - Moderation Service Changelog
 
+## [3.1.0]
+
+- remove `temp_handle_duplicate_moderations` task
+
 ## [3.0.5]
 
 - create moderation record on moderation score error

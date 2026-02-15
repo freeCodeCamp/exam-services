@@ -6,7 +6,7 @@ use moderation_service::{
     config::EnvVars,
     db::{
         auto_approve_moderation_records, award_challenge_ids, delete_practice_exam_attempts,
-        delete_supabase_events, temp_handle_duplicate_moderations, update_moderation_collection,
+        delete_supabase_events, update_moderation_collection,
     },
 };
 use tracing::{error, info};
@@ -125,14 +125,6 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
             (
                 "update_moderation_collection",
                 Box::pin(async move { update_moderation_collection(&env).await }),
-            )
-        },
-        {
-            // Handle duplicate moderations which might have been caused by `update_moderation_collection`
-            let env = env_vars.clone();
-            (
-                "temp_handle_duplicate_moderations",
-                Box::pin(async move { temp_handle_duplicate_moderations(&env).await }),
             )
         },
         {

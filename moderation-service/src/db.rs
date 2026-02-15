@@ -68,6 +68,11 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     let practice_exam_id =
         ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
 
+    let mut num_attempts_expired = 0;
+    let mut num_attempts_passed = 0;
+    let mut num_attempts_below_moderation_threshold = 0;
+    let mut num_attempts_above_moderation_threshold = 0;
+
     while let Some(attempt) = attempts_cursor.next().await {
         let attempt = attempt.context("unable to deserialize attempt to collection")?;
 
@@ -105,6 +110,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
         if expired {
+            num_attempts_expired += 1;
             tracing::debug!(
             attempt = %attempt.id,
                 "creating moderation entry for attempt"
@@ -147,6 +153,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 // Set to true to avoid another check for whether the attempt passed or not.
                 exam_moderation.challenges_awarded = true;
             } else {
+                num_attempts_passed += 1;
                 let events = get_events_for_attempt(&supabase, &attempt.id).await?;
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
@@ -155,12 +162,14 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                         tracing::debug!(moderation_score, attempt = %attempt.id);
 
                         if moderation_score < env_vars.moderation_threshold {
+                            num_attempts_below_moderation_threshold += 1;
                             exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
                             exam_moderation.moderation_date = Some(now);
                             exam_moderation.feedback = Some(format!(
                                 "Auto Approved - Moderation score: {moderation_score}"
                             ));
                         } else {
+                            num_attempts_above_moderation_threshold += 1;
                             exam_moderation.feedback =
                                 Some(format!("Moderation score: {moderation_score}"));
                         }
@@ -192,6 +201,14 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 .context("unable to update attempt with moderation ID")?;
         }
     }
+
+    tracing::info!(
+        num_attempts_expired,
+        num_attempts_passed,
+        num_attempts_below_moderation_threshold,
+        num_attempts_above_moderation_threshold
+    );
+
     Ok(())
 }
 

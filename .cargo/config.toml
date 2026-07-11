@@ -1,0 +1,5 @@
+# Required for wasm32 builds (js-api): selects the browser/Node.js backend
+# for the `getrandom` crate (used by `rand` and `bson`).
+# See https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

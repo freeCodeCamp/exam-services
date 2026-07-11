@@ -1,0 +1,46 @@
+name: Test JS API
+
+on:
+  pull_request:
+    paths:
+      - "js-api/**"
+      - "exam-utils/**"
+      - "prisma/**"
+      - ".cargo/**"
+      - ".github/workflows/test-js-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and Smoke Test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: js-api
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install wasm-pack
+        run: npm install -g wasm-pack
+
+      - name: Build package
+        run: node js-api/build.mjs
+
+      - name: Smoke test
+        run: node js-api/smoke-test.mjs

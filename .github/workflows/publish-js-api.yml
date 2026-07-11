@@ -1,0 +1,61 @@
+name: Publish JS API
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "js-api-v*"
+
+permissions:
+  contents: read
+  # npm provenance
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and Publish
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: js-api
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install wasm-pack
+        run: npm install -g wasm-pack
+
+      - name: Build package
+        run: node js-api/build.mjs
+
+      - name: Smoke test
+        run: node js-api/smoke-test.mjs
+
+      - name: Check tag matches Cargo.toml version
+        if: github.ref_type == 'tag'
+        run: |
+          VERSION=$(grep -m1 '^version = ' js-api/Cargo.toml | cut -d'"' -f2)
+          if [ "${GITHUB_REF_NAME}" != "js-api-v${VERSION}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match js-api/Cargo.toml version ${VERSION}"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: js-api/pkg
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

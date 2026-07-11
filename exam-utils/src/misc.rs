@@ -1,8 +1,8 @@
-use mongodb::bson::oid::ObjectId;
+use bson::oid::ObjectId;
 use prisma;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use tracing::trace;
 
 use crate::error::Error;
@@ -268,6 +268,8 @@ pub fn validate_config(exam: &prisma::ExamEnvironmentExam) -> Result<(), String>
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExamInput {
+    /// Accepts `_id` too, so a full exam document can be passed as-is
+    #[serde(alias = "_id")]
     pub id: ObjectId,
     #[serde(rename = "questionSets")]
     pub question_sets: Vec<prisma::ExamEnvironmentQuestionSet>,
@@ -358,12 +360,15 @@ pub fn generate_exam(exam: ExamInput) -> Result<prisma::ExamEnvironmentGenerated
     sorted_tag_config.sort_by(|a, b| b.group.len().cmp(&a.group.len()));
 
     // Main allocation loop
-    'question_sets_config_loop: for qsc_with_qs in question_sets_config_with_questions.iter_mut() {
-        'sorted_tag_config_loop: for tag_config in sorted_tag_config.iter_mut() {
+    for qsc_with_qs in question_sets_config_with_questions.iter_mut() {
+        for tag_config in sorted_tag_config.iter_mut() {
             // Collect questions to remove (question_set_id, question_id)
+            // NOTE: All exits from `'question_set_loop` must fall through to the
+            // removal below - a question left in `shuffled_question_sets` after
+            // being allocated would be allocated twice.
             let mut questions_to_remove: Vec<(ObjectId, ObjectId)> = Vec::new();
 
-            for question_set in shuffled_question_sets
+            'question_set_loop: for question_set in shuffled_question_sets
                 .iter_mut()
                 .filter(|sqs| sqs._type == qsc_with_qs.config._type)
             {
@@ -378,12 +383,12 @@ pub fn generate_exam(exam: ExamInput) -> Result<prisma::ExamEnvironmentGenerated
                 // If tagConfig is finished, skip.
                 if tag_config.number_of_questions == 0 {
                     trace!(?tag_config.group, "skipping. tag config fulfilled");
-                    continue 'sorted_tag_config_loop;
+                    break 'question_set_loop;
                 }
                 // If questionSetConfig has been fulfilled, skip.
                 if is_question_set_config_fulfilled(qsc_with_qs) {
                     trace!(?qsc_with_qs, "skipping. question set config fulfilled");
-                    continue 'question_sets_config_loop;
+                    break 'question_set_loop;
                 }
 
                 // Store question_set id and metadata before mutable borrow
@@ -417,7 +422,7 @@ pub fn generate_exam(exam: ExamInput) -> Result<prisma::ExamEnvironmentGenerated
                             <= number_of_incorrect_answers
                     {
                         if is_question_set_config_fulfilled(qsc_with_qs) {
-                            continue 'question_sets_config_loop;
+                            break 'question_set_loop;
                         }
 
                         // Push questionSet if it does not exist. Otherwise, just push question
@@ -669,30 +674,31 @@ pub fn generate_exam(exam: ExamInput) -> Result<prisma::ExamEnvironmentGenerated
     trace!("all tag configs are fulfilled");
 
     // Build the final generated exam structure
-    let question_sets: Vec<prisma::ExamEnvironmentGeneratedQuestionSet> =
-        question_sets_config_with_questions
+    // The same exam question set may fulfill multiple question set configs of
+    // the same type, so same-id sets are merged to keep ids unique.
+    let mut question_sets: Vec<prisma::ExamEnvironmentGeneratedQuestionSet> = Vec::new();
+    for qs in question_sets_config_with_questions
+        .into_iter()
+        .flat_map(|qsc| qsc.question_sets)
+    {
+        let questions: Vec<prisma::ExamEnvironmentGeneratedMultipleChoiceQuestion> = qs
+            .questions
             .into_iter()
-            .flat_map(|qsc| {
-                qsc.question_sets.into_iter().map(|qs| {
-                    let questions: Vec<prisma::ExamEnvironmentGeneratedMultipleChoiceQuestion> = qs
-                        .questions
-                        .into_iter()
-                        .map(|q| {
-                            let answers: Vec<ObjectId> =
-                                q.answers.into_iter().map(|a| a.id).collect();
-                            prisma::ExamEnvironmentGeneratedMultipleChoiceQuestion {
-                                id: q.id,
-                                answers,
-                            }
-                        })
-                        .collect();
-                    prisma::ExamEnvironmentGeneratedQuestionSet {
-                        id: qs.id,
-                        questions,
-                    }
-                })
+            .map(|q| {
+                let answers: Vec<ObjectId> = q.answers.into_iter().map(|a| a.id).collect();
+                prisma::ExamEnvironmentGeneratedMultipleChoiceQuestion { id: q.id, answers }
             })
             .collect();
+
+        if let Some(existing) = question_sets.iter_mut().find(|e| e.id == qs.id) {
+            existing.questions.extend(questions);
+        } else {
+            question_sets.push(prisma::ExamEnvironmentGeneratedQuestionSet {
+                id: qs.id,
+                questions,
+            });
+        }
+    }
 
     Ok(prisma::ExamEnvironmentGeneratedExam {
         id: ObjectId::new(),
@@ -769,4 +775,40 @@ fn get_question_with_random_answers(
     let mut result = question.clone();
     result.answers = answers;
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every generatable fixture exam must produce a generation that passes
+    /// `validate_generation` (e.g. no duplicate question set / question ids).
+    /// Generation is randomized, so each exam is generated multiple times.
+    #[test]
+    fn generate_validate_roundtrip() {
+        if !std::path::Path::new("../fixtures/exam").exists() {
+            eprintln!("fixtures/ not found, skipping");
+            return;
+        }
+
+        let mut generated = 0;
+        for f in std::fs::read_dir("../fixtures/exam").unwrap() {
+            let exam = std::fs::read(f.unwrap().path()).unwrap();
+            let exam: ExamInput = serde_json::from_slice(&exam).unwrap();
+
+            for _ in 0..5 {
+                match generate_exam(exam.clone()) {
+                    Ok(generation) => {
+                        crate::generation::validate_generation(&generation).unwrap();
+                        generated += 1;
+                    }
+                    // Some fixture exams are not generatable (e.g. deprecated
+                    // questions are excluded from generation)
+                    Err(Error::Generation(_)) => {}
+                    Err(e) => panic!("unexpected error: {e}"),
+                }
+            }
+        }
+        assert!(generated > 0, "no fixture exam could be generated");
+    }
 }

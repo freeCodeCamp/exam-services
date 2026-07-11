@@ -1,15 +1,18 @@
 [package]
 name = "exam-utils"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2024"
 
 [dependencies]
 bson = { version = "3.1.0", features = ["serde", "serde_with-3"] }
-mongodb = { version = "3.4.1", features = ["bson-3"] }
-prisma = { path = "../prisma" }
+# `prisma` is used for its types only. Native consumers get the `db` module
+# from their own direct `prisma` dependency.
+prisma = { path = "../prisma", default-features = false }
 rand = "0.9.2"
-serde = "1.0.219"
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1"
 serde_with = "3.16.1"
 thiserror = "2.0.17"
 tracing = "0.1.41"
+# Drop-in std::time on native, performance.now()-backed on wasm32-unknown-unknown
+web-time = "1.1.0"

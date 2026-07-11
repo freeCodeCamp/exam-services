@@ -1,4 +1,4 @@
-use mongodb::bson::oid::ObjectId;
+use bson::oid::ObjectId;
 use prisma::{
     self,
     supabase::{Event, EventKind},
@@ -27,7 +27,7 @@ pub struct Attempt {
     pub config: prisma::ExamEnvironmentConfig,
     #[serde(rename = "startTime")]
     #[serde_as(as = "bson::serde_helpers::datetime::AsRfc3339String")]
-    pub start_time: mongodb::bson::DateTime,
+    pub start_time: bson::DateTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ pub struct AttemptQuestionSetQuestion {
     pub generated: Vec<ObjectId>,
     /// If question was submitted, time it was submitted
     #[serde(rename = "submissionTime")]
-    pub submission_time: Option<mongodb::bson::DateTime>,
+    pub submission_time: Option<bson::DateTime>,
 }
 
 /// Constructs an `Attempt`:

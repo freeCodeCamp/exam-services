@@ -192,6 +192,8 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 ///
 /// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
+///
+///
 pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
     // (1 / number of parts)
     let weight = 0.25;
@@ -273,19 +275,19 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
 
     // Blur time after last submission is worth 1/3 as much as before last submission
     // Seeing as both total_blur_time_* vars include the time before, it is counted 'twice'
-    let blur_weight = (total_blur_time / total_time) * weight;
-    if blur_weight > weight {
-        return Err(Error::ModerationScore(format!(
-            "blur weight > weight: {blur_weight} > {weight}"
-        )));
-    }
-    moderation_score += blur_weight;
+    // let blur_weight = (total_blur_time_before_last_answer / total_time) * weight;
+    // if blur_weight > weight {
+    //     return Err(Error::ModerationScore(format!(
+    //         "blur weight > weight: {blur_weight} > {weight}"
+    //     )));
+    // }
+    // moderation_score += blur_weight;
 
-    if total_blur_time_before_last_answer > total_time_taken {
-        return Err(Error::ModerationScore(format!(
-            "total blur time before last answer > total time taken: {total_blur_time_before_last_answer} > {total_time_taken}"
-        )));
-    }
+    // if total_blur_time_before_last_answer > total_time_taken {
+    //     return Err(Error::ModerationScore(format!(
+    //         "total blur time before last answer > total time taken: {total_blur_time_before_last_answer} > {total_time_taken}"
+    //     )));
+    // }
 
     let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
     if blur_before_weight > weight * 2.0 {

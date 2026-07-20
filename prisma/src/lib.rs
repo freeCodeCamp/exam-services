@@ -183,6 +183,7 @@ impl Default for ExamEnvironmentExamModeration {
             moderator_id: Default::default(),
             submission_date: bson::DateTime::now(),
             challenges_awarded: Default::default(),
+            moderation_score: Default::default(),
             version: Default::default(),
         }
     }

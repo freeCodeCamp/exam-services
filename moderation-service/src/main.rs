@@ -46,13 +46,12 @@ async fn main() {
         // NOTE: Events are only emitted, once the guard goes out of scope.
         Some(sentry::init((
             sentry_dsn,
-            sentry::ClientOptions {
-                release: sentry::release_name!(),
-                environment: Some(env_vars.environment.to_string().into()),
-                traces_sample_rate: 1.0,
-                enable_logs: true,
-                ..Default::default()
-            },
+            sentry::ClientOptions::new()
+                .maybe_release(sentry::release_name!())
+                .environment(env_vars.environment.to_string())
+                .traces_sample_rate(1.0)
+                .enable_logs(true)
+                .enable_metrics(true),
         )))
     } else {
         None

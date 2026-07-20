@@ -124,8 +124,9 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 moderation_date: None,
                 submission_date,
                 challenges_awarded: false,
+                moderation_score: None,
                 // TODO: This should not be set outside of prisma in `freeCodeCamp/freeCodeCamp/api`
-                version: 2,
+                version: 3,
             };
 
             let generated_exam =
@@ -164,10 +165,11 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                         if moderation_score < env_vars.moderation_threshold {
                             num_attempts_below_moderation_threshold += 1;
                             exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
+                            // Set to true to avoid another check for whether the attempt passed or not.
+                            exam_moderation.challenges_awarded = true;
                             exam_moderation.moderation_date = Some(now);
-                            exam_moderation.feedback = Some(format!(
-                                "Auto Approved - Moderation score: {moderation_score}"
-                            ));
+                            exam_moderation.moderation_score = Some(moderation_score);
+                            exam_moderation.feedback = Some(format!("Auto Approved"));
                         } else {
                             num_attempts_above_moderation_threshold += 1;
                             exam_moderation.feedback =
@@ -206,7 +208,8 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         num_attempts_expired,
         num_attempts_passed,
         num_attempts_below_moderation_threshold,
-        num_attempts_above_moderation_threshold
+        num_attempts_above_moderation_threshold,
+        "update moderation collection stats"
     );
 
     Ok(())
@@ -493,7 +496,6 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
         .insert_header("Prefer", "return=representation");
 
     let expiry_date = chrono::Utc::now() - chrono::Duration::days(30);
-    tracing::info!(%expiry_date);
 
     let res = client
         .from("events")

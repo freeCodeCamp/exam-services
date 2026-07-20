@@ -193,7 +193,9 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 /// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
 ///
-///
+/// TODO:
+/// - amount of blur time per question
+/// - percentage of questions with blur time
 pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
     // (1 / number of parts)
     let weight = 0.25;

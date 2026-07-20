@@ -68,19 +68,21 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     let practice_exam_id =
         ObjectId::parse_str(PRACTICE_EXAM_ID).expect("static str is valid object id");
 
+    let mut num_attempts_scanned = 0;
+    let mut num_attempts_practice_skipped = 0;
     let mut num_attempts_expired = 0;
     let mut num_attempts_passed = 0;
+    let mut num_attempts_failed_auto_approved = 0;
     let mut num_attempts_below_moderation_threshold = 0;
     let mut num_attempts_above_moderation_threshold = 0;
+    let mut num_score_errors = 0;
 
     while let Some(attempt) = attempts_cursor.next().await {
         let attempt = attempt.context("unable to deserialize attempt to collection")?;
+        num_attempts_scanned += 1;
 
         if attempt.exam_id == practice_exam_id {
-            tracing::debug!(
-                exam = %attempt.exam_id,
-                "skipping practice exam"
-            );
+            num_attempts_practice_skipped += 1;
             continue;
         }
 
@@ -100,21 +102,11 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         let expiry_time_in_ms = start_time_in_ms + total_time_in_ms;
         let expired = expiry_time_in_ms < now.timestamp_millis();
 
-        tracing::debug!(
-            attempt = %attempt.id,
-            time = %DateTime::from_millis(expiry_time_in_ms),
-            "attempt expiry",
-        );
-
         let submission_date =
             DateTime::from_millis(attempt.start_time.timestamp_millis() + total_time_in_ms);
 
         if expired {
             num_attempts_expired += 1;
-            tracing::debug!(
-            attempt = %attempt.id,
-                "creating moderation entry for attempt"
-            );
             let mut exam_moderation = ExamEnvironmentExamModeration {
                 id: ObjectId::new(),
                 exam_attempt_id: attempt.id,
@@ -144,10 +136,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
             // If attempt failed, auto-moderate as approved with feedback
             let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
             if !pass {
-                tracing::debug!(
-                    attempt = %attempt.id,
-                    "attempt failed, setting moderation to approved",
-                );
+                num_attempts_failed_auto_approved += 1;
                 exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
                 exam_moderation.moderation_date = Some(now);
                 exam_moderation.feedback = Some("Auto Approved - Failed attempt".to_string());
@@ -160,7 +149,11 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
                 match get_moderation_score(&attempt, &events) {
                     Ok(moderation_score) => {
-                        tracing::debug!(moderation_score, attempt = %attempt.id);
+                        sentry::metrics::distribution(
+                            "exam_service.moderation_score",
+                            moderation_score,
+                        )
+                        .capture();
 
                         if moderation_score < env_vars.moderation_threshold {
                             num_attempts_below_moderation_threshold += 1;
@@ -177,6 +170,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                         }
                     }
                     Err(e) => {
+                        num_score_errors += 1;
                         tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
                         exam_moderation.feedback =
                             Some(format!("Moderation score calculation error."));
@@ -204,13 +198,30 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
         }
     }
 
-    tracing::info!(
-        num_attempts_expired,
-        num_attempts_passed,
+    sentry::metrics::counter("exam_service.attempts_scanned", num_attempts_scanned).capture();
+    sentry::metrics::counter(
+        "exam_service.attempts_practice_skipped",
+        num_attempts_practice_skipped,
+    )
+    .capture();
+    sentry::metrics::counter("exam_service.attempts_expired", num_attempts_expired).capture();
+    sentry::metrics::counter("exam_service.attempts_passed", num_attempts_passed).capture();
+    sentry::metrics::counter(
+        "exam_service.attempts_failed_auto_approved",
+        num_attempts_failed_auto_approved,
+    )
+    .capture();
+    sentry::metrics::counter(
+        "exam_service.below_threshold",
         num_attempts_below_moderation_threshold,
+    )
+    .capture();
+    sentry::metrics::counter(
+        "exam_service.above_threshold",
         num_attempts_above_moderation_threshold,
-        "update moderation collection stats"
-    );
+    )
+    .capture();
+    sentry::metrics::counter("exam_service.score_errors", num_score_errors).capture();
 
     Ok(())
 }
@@ -270,15 +281,23 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
         .await
         .context("unable to deserialize moderation records to projection")?;
 
+    // Current pending backlog awaiting moderation.
+    sentry::metrics::gauge(
+        "exam_service.pending_backlog",
+        moderation_records.len() as f64,
+    )
+    .capture();
+
     let now = DateTime::now();
+
+    let mut num_auto_approved_expired = 0;
 
     // If moderation record is pending, and is older than set moderation length, approve
     for moderation in moderation_records.iter() {
         let submission_date = moderation.submission_date;
         let expiry_date = submission_date.saturating_add_duration(env_vars.moderation_length_in_s);
-        tracing::debug!(moderation = %moderation.id, %expiry_date, "moderation expiry", );
         if now > expiry_date {
-            tracing::info!(moderation = %moderation.id, "moderation auto-moderated");
+            num_auto_approved_expired += 1;
             moderation_collection
                 .update_one(
                     doc! {
@@ -296,6 +315,12 @@ pub async fn auto_approve_moderation_records(env_vars: &EnvVars) -> anyhow::Resu
                 .context("unable to auto-update moderation collection")?;
         }
     }
+
+    sentry::metrics::counter(
+        "exam_service.auto_approved_expired",
+        num_auto_approved_expired,
+    )
+    .capture();
 
     Ok(())
 }
@@ -353,8 +378,6 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         .map(|a| a.generated_exam_id)
         .collect::<std::collections::HashSet<_>>();
 
-    tracing::debug!(?unique_exam_ids);
-
     let exam_environment_challenges: Vec<ExamEnvironmentChallenge> =
         exam_environment_challenge_collection
             .find(doc! {"examId": {"$in": &unique_exam_ids}})
@@ -374,6 +397,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         .try_collect::<Vec<_>>()
         .await?;
 
+    let mut num_challenge_not_found = 0;
     let mut updates = vec![];
     for attempt in attempts {
         // Check attempt passes exam:
@@ -387,11 +411,6 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
             .context("generated exam must exist for attempt")?;
         let pass = check_attempt_pass(&exam, &generated_exam, &attempt);
 
-        tracing::debug!(
-            attempt_id = %attempt.id,
-            exam_id = %attempt.exam_id,
-            "Attempt passed: {pass}"
-        );
         if !pass {
             continue;
         }
@@ -403,6 +422,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         {
             Some(challenge) => challenge.challenge_id.to_hex(),
             None => {
+                num_challenge_not_found += 1;
                 tracing::warn!(
                     user_id = %attempt.user_id,
                     exam_id = %attempt.exam_id,
@@ -433,10 +453,7 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
     if !updates.is_empty() {
         let res = user_collection.client().bulk_write(updates).await?;
 
-        tracing::info!(
-            num = res.modified_count,
-            "updated users with new challenge IDs",
-        );
+        sentry::metrics::counter("exam_service.users_awarded", res.modified_count as f64).capture();
     }
 
     // Finally, update all moderation records to set challengesAwarded to true where status is approved and challengesAwarded is false
@@ -447,10 +464,12 @@ pub async fn award_challenge_ids(env_vars: &EnvVars) -> anyhow::Result<()> {
         )
         .await
         .context("unable to update moderation records to set challengesAwarded to true")?;
-    tracing::info!(
-        num = update_result.modified_count,
-        "updated moderation records to set challengesAwarded to true",
-    );
+    sentry::metrics::counter(
+        "exam_service.challenges_awarded",
+        update_result.modified_count as f64,
+    )
+    .capture();
+    sentry::metrics::counter("exam_service.challenge_not_found", num_challenge_not_found).capture();
 
     Ok(())
 }
@@ -477,10 +496,11 @@ pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result
     .await
     .context("unable to delete practice exam attempts")?;
 
-    tracing::info!(
-        num = delete_result.deleted_count,
-        "deleted practice exam attempts",
-    );
+    sentry::metrics::counter(
+        "exam_service.practice_attempts_deleted",
+        delete_result.deleted_count as f64,
+    )
+    .capture();
 
     Ok(())
 }
@@ -509,9 +529,11 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
     let json: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
     match json {
         Ok(v) => {
-            tracing::info!(num = v.len(), "deleted supabase rows");
+            sentry::metrics::counter("exam_service.supabase_events_deleted", v.len() as f64)
+                .capture();
         }
         Err(e) => {
+            sentry::metrics::counter("exam_service.supabase_events_parse_errors", 1).capture();
             tracing::warn!(error = %e, text, "unable to serialize response as json array");
         }
     };

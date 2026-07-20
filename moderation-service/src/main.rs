@@ -9,7 +9,7 @@ use moderation_service::{
         delete_supabase_events, update_moderation_collection,
     },
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -57,6 +57,9 @@ async fn main() {
         None
     };
 
+    // Liveness/cadence signal: one per process start.
+    sentry::metrics::counter("exam_service.run", 1).capture();
+
     // Build a future that runs all registered tasks (easy to extend by adding to the vector
     // inside `run_registered_tasks`).
     let all_tasks = run_registered_tasks(&env_vars);
@@ -83,8 +86,11 @@ async fn main() {
     let task = async {
         if let Some(secs) = env_vars.timeout_secs {
             match tokio::time::timeout(Duration::from_secs(secs), all_tasks).await {
-                Ok(_) => info!("All tasks completed within timeout."),
-                Err(_) => error!("Tasks timed out after {secs} seconds"),
+                Ok(_) => debug!("All tasks completed within timeout."),
+                Err(_) => {
+                    sentry::metrics::counter("exam_service.task_timeout", 1).capture();
+                    error!("Tasks timed out after {secs} seconds");
+                }
             }
         } else {
             all_tasks.await;
@@ -153,9 +159,21 @@ async fn run_registered_tasks(env_vars: &EnvVars) {
     ];
 
     for (name, fut) in tasks {
-        match fut.await {
-            Ok(_) => info!("Task {name} completed"),
-            Err(e) => error!("Task {name} failed: {e:?}"),
+        let start = std::time::Instant::now();
+        let result = fut.await;
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        sentry::metrics::distribution("exam_service.task_duration", elapsed_ms)
+            .unit(sentry::protocol::Unit::Millisecond)
+            .attribute("task", name)
+            .capture();
+        match result {
+            Ok(_) => debug!("Task {name} completed"),
+            Err(e) => {
+                sentry::metrics::counter("exam_service.task_failed", 1)
+                    .attribute("task", name)
+                    .capture();
+                error!("Task {name} failed: {e:?}");
+            }
         }
     }
 }

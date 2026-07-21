@@ -2,8 +2,8 @@ use bson::oid::ObjectId;
 use prisma;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use web_time::{Duration, Instant};
 use tracing::trace;
+use web_time::{Duration, Instant};
 
 use crate::error::Error;
 

@@ -203,36 +203,33 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 ///
 /// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
-///
-/// If number of questions blurred is > 20%
 pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
     let weight = 1.0 / 4.0;
     let mut moderation_score = 0.0;
-    let mut total_blur_time = 0.0;
-    let mut total_blur_time_before_last_answer = 0.0;
+
+    let any_answered = attempt
+        .question_sets
+        .iter()
+        .flat_map(|qs| qs.questions.iter())
+        .any(|q| q.submission_time.is_some());
+
+    if !any_answered {
+        // Theoretically impossible -> function currently only called if attempt passes
+        tracing::warn!(attempt = %attempt.id, "attempt did not submit any answers");
+        return Ok(moderation_score);
+    }
 
     let mut events = events.clone();
     events.sort_by(|a, b| (a.timestamp).cmp(&b.timestamp));
 
-    let last_submission_time = attempt
-        .question_sets
-        .iter()
-        .flat_map(|qs| qs.questions.iter().flat_map(|q| q.submission_time))
-        .max();
-
-    let last_submission_time = match last_submission_time {
-        Some(last_submission_time) => last_submission_time,
-        None => {
-            // Theoretically, this should be impossible -> function currently only called if attempt passes
-            tracing::warn!(attempt = %attempt.id, "attempt did not submit any answers");
-            return Ok(moderation_score);
-        }
-    };
+    let last_submission_time = get_last_submission_time(&attempt);
 
     let total_number_of_questions = attempt
         .question_sets
         .iter()
-        .fold(0, |acc, curr| acc + curr.questions.len());
+        .flat_map(|qs| qs.questions.iter())
+        .filter(|q| q.submission_time.is_some())
+        .count();
 
     // Time taken to answer all questions -> does not include checking over answers / waiting before exiting
     let total_time_taken = last_submission_time
@@ -247,31 +244,28 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
             total_time_taken, total_time
         )));
     }
-    if total_blur_time > total_time {
-        return Err(Error::ModerationScore(format!(
-            "total blur time > total time: {total_blur_time} > {total_time}"
-        )));
-    }
-    if total_blur_time_before_last_answer > total_blur_time {
-        return Err(Error::ModerationScore(format!(
-            "total blur time before last answer > total blur time: {total_blur_time_before_last_answer} > {total_blur_time}"
-        )));
+
+    let time_taken_percent = total_time_taken / total_time;
+    // map 10% -> 0 score; 0% -> 0.25 score
+    if time_taken_percent < 0.1 {
+        moderation_score += ((time_taken_percent - 0.1).abs() / 0.1) * weight;
     }
 
-    // let time_weight = ((total_time - total_time_taken) / total_time) * weight;
-    // if time_weight > weight {
-    //     return Err(Error::ModerationScore(format!(
-    //         "time weight > weight: {time_weight} > {weight}"
-    //     )));
-    // }
-    // moderation_score += time_weight;
-
-    // Median Time Taken to Answer Per Question - LOW->HIGH
+    // Median Time Taken to Answer Per Question
     let mut time_per_question = get_time_per_question(attempt, &events);
     time_per_question.sort();
-    let median_time_per_question = time_per_question.median();
+    let median_time_per_question = time_per_question
+        .median()
+        .ok_or(Error::ModerationScore(format!(
+            "unable to calculate median for time per question"
+        )))?
+        .as_secs_f64();
+    // map 5s -> 0 score; 0s -> 0.25 score
+    if median_time_per_question < 5.0 {
+        moderation_score += ((median_time_per_question - 5.0).abs() / 5.0) * weight;
+    }
 
-    // Number of Questions Blurred - HIGH
+    // Number of Questions Blurred
     let blur_periods = get_blur_periods(&events);
     let blur_periods_before = blur_periods
         .iter()
@@ -297,42 +291,9 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
     let questions_blurred_percent =
         num_questions_blurred_before as f64 / total_number_of_questions as f64;
     let questions_blurred_weight =
-        (questions_blurred_percent / (100.0 - attempt.config.passing_percent)).min(1.0) * weight;
+        (questions_blurred_percent * 100.0 / (100.0 - attempt.config.passing_percent)).min(1.0)
+            * weight;
     moderation_score += questions_blurred_weight;
-
-    // let mut total_blur_per_question = Vec::new();
-    // for qbp in blur_periods_before {
-    //     let mut question_blur_times = Vec::new();
-    //     for q in qbp.periods {
-    //         let time = q
-    //             .end
-    //             .checked_duration_since(q.start)
-    //             .expect("question blur period start to be before end");
-    //         question_blur_times.push(time);
-    //     }
-    //     let total_question_blur = question_blur_times
-    //         .into_iter()
-    //         .reduce(|acc, curr| acc.saturating_add(curr))
-    //         .expect("one or more question blur times after filter");
-    //     total_blur_per_question.push(total_question_blur);
-    // }
-    // // Median Time Blurred Per Question - LOW
-    // let median = total_blur_per_question.median();
-    // // Total Time Blurred Before Last Answer - MEDIUM
-    // let total_time_blurred_before = total_blur_per_question
-    //     .into_iter()
-    //     .reduce(|acc, curr| acc.saturating_add(curr));
-
-    // let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
-    // if blur_before_weight > weight * 2.0 {
-    //     return Err(Error::ModerationScore(format!(
-    //         r#"blur before weight > weight: {blur_before_weight} > {}
-    //         | blur before last | total time taken |
-    //         | {total_blur_time_before_last_answer} | {total_time_taken} |"#,
-    //         weight * 2.0
-    //     )));
-    // }
-    // moderation_score += blur_before_weight;
 
     if moderation_score > 1.0 {
         tracing::error!(
@@ -376,8 +337,13 @@ impl<T: Ord + Copy + std::ops::Add<Output = T> + std::ops::Div<u32, Output = T>>
 /// last question shown is not dropped, and time spent revisiting a question
 /// after it was answered is not counted.
 ///
-/// Questions with no submission, or with no preceding visit event, are omitted
-/// rather than guessed at.
+/// Fault-tolerant to missing visit events: with no visit for a question, the
+/// span starts at the nearest earlier submission of any other question -
+/// questions are not necessarily answered in order, so this is the latest
+/// submission before this one, not the preceding question in the exam. Falling
+/// back further, the attempt's start time is used.
+///
+/// Questions with no submission are omitted.
 pub fn get_time_per_question(attempt: &Attempt, events: &Vec<Event>) -> Vec<Duration> {
     let mut visits: Vec<(ObjectId, DateTime)> = vec![];
 
@@ -397,27 +363,40 @@ pub fn get_time_per_question(attempt: &Attempt, events: &Vec<Event>) -> Vec<Dura
         visits.push((question_id, event.timestamp.into()));
     }
 
+    let questions = || {
+        attempt
+            .question_sets
+            .iter()
+            .flat_map(|qs| qs.questions.iter())
+    };
+
     let mut times = vec![];
 
-    for question in attempt
-        .question_sets
-        .iter()
-        .flat_map(|qs| qs.questions.iter())
-    {
+    for question in questions() {
         let Some(submission_time) = question.submission_time else {
             continue;
         };
 
-        let Some(visit_start) = visits
+        let visit_start = visits
             .iter()
             .filter(|(id, timestamp)| *id == question.id && *timestamp <= submission_time)
             .map(|(_, timestamp)| *timestamp)
-            .max()
-        else {
-            continue;
-        };
+            .max();
 
-        times.push(submission_time.saturating_duration_since(visit_start));
+        let start = visit_start
+            .or_else(|| {
+                // Nearest earlier submission of any other question: answering
+                // that question is the latest point this one could have been
+                // started from.
+                questions()
+                    .filter(|q| q.id != question.id)
+                    .filter_map(|q| q.submission_time)
+                    .filter(|t| *t < submission_time)
+                    .max()
+            })
+            .unwrap_or(attempt.start_time);
+
+        times.push(submission_time.saturating_duration_since(start));
     }
 
     times
@@ -646,8 +625,6 @@ mod tests {
 
             scores.push(format!("{:.3}", score));
         }
-
-        println!("{:#?}", scores);
 
         dbg!(min, max);
 

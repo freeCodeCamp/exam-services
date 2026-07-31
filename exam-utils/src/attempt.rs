@@ -203,7 +203,10 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 ///
 /// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
+///
+/// If number of questions blurred is > 20%
 pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
+    let weight = 1.0 / 4.0;
     let mut moderation_score = 0.0;
     let mut total_blur_time = 0.0;
     let mut total_blur_time_before_last_answer = 0.0;
@@ -225,6 +228,11 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
             return Ok(moderation_score);
         }
     };
+
+    let total_number_of_questions = attempt
+        .question_sets
+        .iter()
+        .fold(0, |acc, curr| acc + curr.questions.len());
 
     // Time taken to answer all questions -> does not include checking over answers / waiting before exiting
     let total_time_taken = last_submission_time
@@ -259,7 +267,7 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
     // moderation_score += time_weight;
 
     // Median Time Taken to Answer Per Question - LOW->HIGH
-    let mut time_per_question = get_time_per_question(&events);
+    let mut time_per_question = get_time_per_question(attempt, &events);
     time_per_question.sort();
     let median_time_per_question = time_per_question.median();
 
@@ -285,28 +293,35 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
         .collect::<Vec<_>>();
     let num_questions_blurred_before = blur_periods_before.len();
 
-    let mut total_blur_per_question = Vec::new();
-    for qbp in blur_periods_before {
-        let mut question_blur_times = Vec::new();
-        for q in qbp.periods {
-            let time = q
-                .end
-                .checked_duration_since(q.start)
-                .expect("question blur period start to be before end");
-            question_blur_times.push(time);
-        }
-        let total_question_blur = question_blur_times
-            .into_iter()
-            .reduce(|acc, curr| acc.saturating_add(curr))
-            .expect("one or more question blur times after filter");
-        total_blur_per_question.push(total_question_blur);
-    }
-    // Median Time Blurred Per Question - LOW
-    let median = total_blur_per_question.median();
-    // Total Time Blurred Before Last Answer - MEDIUM
-    let total_time_blurred_before = total_blur_per_question
-        .into_iter()
-        .reduce(|acc, curr| acc.saturating_add(curr));
+    // adds 0.25 to score, if >= 20% of questions
+    let questions_blurred_percent =
+        num_questions_blurred_before as f64 / total_number_of_questions as f64;
+    let questions_blurred_weight =
+        (questions_blurred_percent / (100.0 - attempt.config.passing_percent)).min(1.0) * weight;
+    moderation_score += questions_blurred_weight;
+
+    // let mut total_blur_per_question = Vec::new();
+    // for qbp in blur_periods_before {
+    //     let mut question_blur_times = Vec::new();
+    //     for q in qbp.periods {
+    //         let time = q
+    //             .end
+    //             .checked_duration_since(q.start)
+    //             .expect("question blur period start to be before end");
+    //         question_blur_times.push(time);
+    //     }
+    //     let total_question_blur = question_blur_times
+    //         .into_iter()
+    //         .reduce(|acc, curr| acc.saturating_add(curr))
+    //         .expect("one or more question blur times after filter");
+    //     total_blur_per_question.push(total_question_blur);
+    // }
+    // // Median Time Blurred Per Question - LOW
+    // let median = total_blur_per_question.median();
+    // // Total Time Blurred Before Last Answer - MEDIUM
+    // let total_time_blurred_before = total_blur_per_question
+    //     .into_iter()
+    //     .reduce(|acc, curr| acc.saturating_add(curr));
 
     // let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
     // if blur_before_weight > weight * 2.0 {
@@ -352,17 +367,21 @@ impl<T: Ord + Copy + std::ops::Add<Output = T> + std::ops::Div<u32, Output = T>>
     }
 }
 
-/// Needs to be fault-tolerant for missing events
-/// Time on question = sum(navigation timestamps)
-/// TODO: Consider adding attempt data as fallback for any missing events
-pub fn get_time_per_question(events: &Vec<Event>) -> Vec<Duration> {
-    let mut events = events.clone();
-    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+/// Time spent per question before final submission.
+///
+/// Time on question = question.submission_time - timestamp of the latest
+/// `QuestionVisit` event for that question at or before the submission.
+///
+/// The attempt bounds the span, so - unlike pairing consecutive visits - the
+/// last question shown is not dropped, and time spent revisiting a question
+/// after it was answered is not counted.
+///
+/// Questions with no submission, or with no preceding visit event, are omitted
+/// rather than guessed at.
+pub fn get_time_per_question(attempt: &Attempt, events: &Vec<Event>) -> Vec<Duration> {
+    let mut visits: Vec<(ObjectId, DateTime)> = vec![];
 
-    let mut totals: Vec<(ObjectId, Duration)> = vec![];
-    let mut pending_visit = None;
-
-    for event in &events {
+    for event in events {
         if !matches!(event.kind, EventKind::QuestionVisit) {
             continue;
         }
@@ -375,25 +394,33 @@ pub fn get_time_per_question(events: &Vec<Event>) -> Vec<Duration> {
             continue;
         };
 
-        // Closes the previous visit on arrival at the next one: time on a
-        // question is the span between consecutive QuestionVisit events.
-        if let Some((visit_start, prev_question_id)) = pending_visit.take() {
-            let delta = event.timestamp.signed_duration_since(visit_start);
-            let elapsed = delta.to_std().unwrap_or(Duration::ZERO);
-
-            match totals.iter_mut().find(|(id, _)| *id == prev_question_id) {
-                Some((_, total)) => *total += elapsed,
-                None => totals.push((prev_question_id, elapsed)),
-            }
-        }
-
-        pending_visit = Some((event.timestamp, question_id));
+        visits.push((question_id, event.timestamp.into()));
     }
-    // A trailing pending visit (the last question shown) has no closing
-    // event: its end is unknown, so - fault-tolerant to missing events -
-    // it is dropped rather than guessed at, mirroring `get_blur_periods`.
 
-    totals.into_iter().map(|(_, duration)| duration).collect()
+    let mut times = vec![];
+
+    for question in attempt
+        .question_sets
+        .iter()
+        .flat_map(|qs| qs.questions.iter())
+    {
+        let Some(submission_time) = question.submission_time else {
+            continue;
+        };
+
+        let Some(visit_start) = visits
+            .iter()
+            .filter(|(id, timestamp)| *id == question.id && *timestamp <= submission_time)
+            .map(|(_, timestamp)| *timestamp)
+            .max()
+        else {
+            continue;
+        };
+
+        times.push(submission_time.saturating_duration_since(visit_start));
+    }
+
+    times
 }
 
 pub fn get_total_time(attempt: &Attempt) -> Duration {

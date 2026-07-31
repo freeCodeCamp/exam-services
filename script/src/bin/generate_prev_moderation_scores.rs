@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use exam_utils::attempt::{Attempt, construct_attempt};
+use exam_utils::attempt::{Attempt, construct_attempt, get_moderation_score};
 use exam_utils::error::Error;
 use mongodb::bson::oid::ObjectId;
 use prisma::{
@@ -65,11 +65,21 @@ fn main() -> anyhow::Result<()> {
 
         match get_moderation_score_pre_bc6af64(&constructed, &events) {
             Ok(prev_moderation_score) => {
+                // Current algorithm score (live `exam-utils` `get_moderation_score`).
+                let moderation_score = match get_moderation_score(&constructed, &events) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        eprintln!("current-score skip {}: {e}", attempt.id.to_hex());
+                        None
+                    }
+                };
                 let record = json!({
                     "examAttemptId": attempt.id.to_hex(),
                     "prevModerationScore": prev_moderation_score,
                     // Provenance so the value is not mistaken for a prod score.
                     "prevModerationScoreSource": "get_moderation_score@bc6af64^",
+                    "moderationScore": moderation_score,
+                    "moderationScoreSource": "get_moderation_score@HEAD",
                 });
                 std::fs::write(
                     fixture_path("moderation", &attempt.id),

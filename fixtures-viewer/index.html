@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Exam Attempt Fixtures Viewer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115;
+    --fg: #e6e6e6;
+    --muted: #9aa0a6;
+    --card: #181b21;
+    --border: #2a2e37;
+    --accent: #2dd4da;
+    --correct: #34d399;
+    --incorrect: #f87171;
+    --visit: #a78bfa;
+    --unfocused: #f87171;
+    --diff: #fb923c;
+    --highlight: rgba(45, 212, 218, 0.12);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f7f8; --fg: #1a1a1a; --muted: #5f6368; --card: #ffffff; --border: #e3e3e6;
+      --highlight: rgba(13, 148, 154, 0.08);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 1.5rem;
+  }
+  .page { max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.05rem; font-weight: 600; margin: 0 0 1rem; color: var(--muted); }
+
+  .toolbar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  select, input[type="text"] {
+    background: var(--card);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.45rem 0.7rem;
+    font-size: 0.9rem;
+  }
+  select { min-width: 320px; }
+  .toolbar label { font-size: 0.85rem; color: var(--muted); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    padding: 1.25rem 1.5rem 1.5rem;
+  }
+
+  .header-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
+  .header-row h2 { font-size: 1.4rem; font-weight: 800; margin: 0; }
+  .header-row .date { color: var(--accent); font-size: 0.95rem; }
+
+  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.5rem 1.5rem; margin-bottom: 0.75rem; }
+  .switch-field { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; color: var(--muted); }
+
+  .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: var(--border); border-radius: 999px; transition: 0.15s;
+  }
+  .slider::before {
+    content: ""; position: absolute; height: 14px; width: 14px; left: 3px; top: 3px;
+    background: var(--card); border-radius: 50%; transition: 0.15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(14px); }
+
+  .legend-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; min-height: 2rem; margin-bottom: 0.5rem; }
+  .legend { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+  .legend-key { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--muted); }
+  .zoom-controls { display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem; color: var(--muted); }
+  #reset-zoom {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 6px;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+  }
+
+  .chart-wrap { height: 60vh; min-height: 320px; resize: vertical; overflow: hidden; cursor: ns-resize; }
+
+  .stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 1.25rem;
+    margin-top: 1rem;
+    padding: 1rem 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-tile { flex: 1 1 0; min-width: 155px; padding: 0 1.25rem; border-left: 1px solid var(--border); }
+  .stat-tile:first-child { border-left: none; padding-left: 0; }
+  .stat-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .stat-value { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+  .stat-unit { font-size: 0.8rem; font-weight: 400; color: var(--muted); margin-left: 0.35rem; }
+  .stat-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
+  .score-bar { height: 5px; border-radius: 999px; background: rgba(52, 211, 153, 0.2); overflow: hidden; margin-top: 0.5rem; max-width: 110px; }
+  .score-bar > div { height: 100%; background: var(--correct); border-radius: 999px; }
+
+  #empty { color: var(--muted); padding: 2rem 0; }
+</style>
+</head>
+<body>
+<div class="page">
+<h1>Exam Attempt Fixtures Viewer</h1>
+
+<div class="toolbar">
+  <label for="attempt-select">Attempt</label>
+  <select id="attempt-select"></select>
+  <label for="filter">Filter</label>
+  <input id="filter" type="text" placeholder="attemptId or examId substring" />
+</div>
+
+<div class="card">
+  <div class="header-row">
+    <h2 id="exam-title">-</h2>
+    <span class="date" id="exam-date"></span>
+  </div>
+
+  <div class="switches">
+    <label class="switch-field">
+      <span class="switch"><input type="checkbox" id="toggle-diff" /><span class="slider"></span></span>
+      Submission Diff
+    </label>
+    <label class="switch-field">
+      <span class="switch"><input type="checkbox" id="toggle-sort" /><span class="slider"></span></span>
+      Sort by Submission Time
+    </label>
+    <label class="switch-field">
+      <span class="switch"><input type="checkbox" id="toggle-timeline" /><span class="slider"></span></span>
+      Submission Frequency
+    </label>
+    <label class="switch-field">
+      <span class="switch"><input type="checkbox" id="toggle-events" checked /><span class="slider"></span></span>
+      Events
+    </label>
+  </div>
+
+  <div class="legend-row">
+    <div class="legend" id="legend"></div>
+    <div class="zoom-controls">
+      <button id="reset-zoom"></button>
+      <span id="zoom-note">Drag vertically on chart to zoom y-axis</span>
+    </div>
+  </div>
+
+  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+
+  <div class="stats-row" id="stats"></div>
+</div>
+</div>
+
+<div id="empty" style="display:none">No data.json found — run <code>bun run fixtures-viewer/build.js</code> first, then serve this directory over http (not file://).</div>
+
+<script>
+function median(values) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function secondsToHuman(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function withAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+let chart;
+let currentAttempt = null;
+let yZoomDomain = null;
+
+// ---- data shaping (mirrors getAttemptStats / the chartData memo in edit-attempt.tsx) ----
+
+function computeQuestions(attempt, opts) {
+  let questions = attempt.questions.map((q) => ({
+    ...q,
+    timeSinceStartInS: q.submissionTime != null ? (q.submissionTime - attempt.startTime) / 1000 : null,
+  }));
+
+  if (opts.sort) {
+    questions = [...questions].sort((a, b) => (a.timeSinceStartInS ?? 0) - (b.timeSinceStartInS ?? 0));
+  }
+
+  if (opts.timeline) {
+    questions = questions.map((q, i) => {
+      if (q.timeSinceStartInS == null) return q;
+      if (i === 0) return { ...q, questionTimeDiff: q.timeSinceStartInS };
+      const prev = questions[i - 1];
+      if (prev.timeSinceStartInS == null) return q;
+      return { ...q, questionTimeDiff: q.timeSinceStartInS - prev.timeSinceStartInS };
+    });
+  }
+
+  return questions;
+}
+
+function computeVisitEvents(attempt, questionIdToIdx) {
+  return attempt.events
+    .filter((e) => e.kind === "QUESTION_VISIT")
+    .map((e) => {
+      const idx = questionIdToIdx.get(e.question);
+      if (idx === undefined) return null;
+      return { x: idx, y: (e.timestamp - attempt.startTime) / 1000 };
+    })
+    .filter(Boolean);
+}
+
+// BLUR -> FOCUS spans, in seconds-since-start. These render as full-width
+// horizontal bands (the user could've been unfocused across many questions),
+// so unlike everything else on this chart they carry no x/idx of their own.
+function computeFocusGaps(attempt) {
+  const sorted = [...attempt.events].sort((a, b) => a.timestamp - b.timestamp);
+  const gaps = [];
+  let lastBlur = null;
+  for (const e of sorted) {
+    if (e.kind === "BLUR") {
+      lastBlur = e;
+    } else if (e.kind === "FOCUS" && lastBlur) {
+      gaps.push({
+        blurTime: (lastBlur.timestamp - attempt.startTime) / 1000,
+        focusTime: (e.timestamp - attempt.startTime) / 1000,
+      });
+      lastBlur = null;
+    }
+  }
+  return gaps;
+}
+
+// ---- custom plugin: bracket-and-label between consecutive submissions ----
+const bracketLayerPlugin = {
+  id: "bracketLayer",
+  afterDatasetsDraw(chart, _args, opts) {
+    const pairs = opts?.pairs;
+    if (!pairs || !pairs.length) return;
+    const { ctx, scales } = chart;
+    const x = scales.x;
+    const y = scales.y;
+    ctx.save();
+    ctx.strokeStyle = cssVar("--diff");
+    ctx.fillStyle = cssVar("--diff");
+    ctx.lineWidth = 1;
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    for (const p of pairs) {
+      const x1 = x.getPixelForValue(p.prevIdx);
+      const x2 = x.getPixelForValue(p.idx);
+      const yPix = y.getPixelForValue(p.peak);
+      ctx.beginPath();
+      ctx.moveTo(x1, yPix + 6);
+      ctx.lineTo(x1, yPix);
+      ctx.lineTo(x2, yPix);
+      ctx.lineTo(x2, yPix + 6);
+      ctx.stroke();
+      ctx.fillText(`${p.diff.toFixed(1)}s`, (x1 + x2) / 2, yPix - 4);
+    }
+    ctx.restore();
+  },
+};
+Chart.register(bracketLayerPlugin);
+
+function render(attempt) {
+  const opts = {
+    diff: document.getElementById("toggle-diff").checked,
+    sort: document.getElementById("toggle-sort").checked,
+    timeline: document.getElementById("toggle-timeline").checked,
+    events: document.getElementById("toggle-events").checked,
+  };
+
+  const questions = computeQuestions(attempt, opts);
+  const questionIdToIdx = new Map(attempt.questions.map((q) => [q.questionId, q.idx]));
+
+  const answeredQuestions = questions.filter((q) => q.timeSinceStartInS != null);
+  const correctAnswers = answeredQuestions.filter((q) => q.isCorrect === true);
+  const incorrectAnswers = answeredQuestions.filter((q) => q.isCorrect === false);
+  const unknownAnswers = answeredQuestions.filter((q) => q.isCorrect === null);
+
+  const visitEvents = opts.events ? computeVisitEvents(attempt, questionIdToIdx) : [];
+  const focusGaps = opts.events ? computeFocusGaps(attempt) : [];
+
+  const lastSubmission = Math.max(0, ...attempt.questions.map((q) => q.submissionTime ?? 0));
+  const timeToComplete = lastSubmission > 0 ? (lastSubmission - attempt.startTime) / 1000 : 0;
+
+  const totalUnfocussedTime = focusGaps.reduce((acc, f) => acc + (f.focusTime - f.blurTime), 0);
+  const preFinalGaps = focusGaps.filter((f) => f.blurTime <= timeToComplete && f.focusTime <= timeToComplete);
+  const unfocussedBeforeFinal = preFinalGaps.reduce((acc, f) => acc + (f.focusTime - f.blurTime), 0);
+  const medianUnfocussedBeforeFinal = median(preFinalGaps.map((f) => f.focusTime - f.blurTime));
+  const unfocussedPct = timeToComplete > 0 ? (unfocussedBeforeFinal / timeToComplete) * 100 : 0;
+
+  const totalQuestions = attempt.questions.length;
+  const answered = answeredQuestions.length;
+  const correct = correctAnswers.length;
+  const scorePct = totalQuestions > 0 ? (correct / totalQuestions) * 100 : 0;
+  const averageTimePerQuestion = answered > 0 ? (timeToComplete / answered).toFixed(2) : "0";
+  const submissionTimesSorted = answeredQuestions.map((q) => q.timeSinceStartInS).sort((a, b) => a - b);
+  const perQuestionTimes = submissionTimesSorted.map((t, i) => (i === 0 ? t : t - submissionTimesSorted[i - 1]));
+  const medianTimePerQuestion = perQuestionTimes.length > 0 ? median(perQuestionTimes).toFixed(2) : "0";
+
+  document.getElementById("exam-title").textContent = attempt.examName ?? `Attempt ${attempt.attemptId}`;
+  document.getElementById("exam-date").textContent = new Date(attempt.startTime).toLocaleString();
+
+  renderLegend(opts, unknownAnswers.length > 0);
+  renderStats({
+    correct, totalQuestions, answered, scorePct, timeToComplete,
+    averageTimePerQuestion, medianTimePerQuestion,
+    unfocussedBeforeFinal, unfocussedPct, totalUnfocussedTime, medianUnfocussedBeforeFinal,
+    preFinalGapsCount: preFinalGaps.length,
+    eventsCount: attempt.events.length,
+    moderationScore: attempt.moderationScore,
+    prevModerationScore: attempt.prevModerationScore,
+  });
+
+  const datasets = [
+    {
+      label: "Correct",
+      data: correctAnswers.map((q) => ({ x: q.idx, y: q.timeSinceStartInS })),
+      showLine: false,
+      pointStyle: "circle",
+      pointRadius: 5,
+      pointBackgroundColor: cssVar("--correct"),
+      borderColor: cssVar("--correct"),
+    },
+    {
+      label: "Incorrect",
+      data: incorrectAnswers.map((q) => ({ x: q.idx, y: q.timeSinceStartInS })),
+      showLine: false,
+      pointStyle: "crossRot",
+      pointRadius: 6,
+      borderColor: cssVar("--incorrect"),
+      backgroundColor: cssVar("--incorrect"),
+      borderWidth: 2,
+    },
+  ];
+
+  if (unknownAnswers.length > 0) {
+    datasets.push({
+      label: "Unknown",
+      data: unknownAnswers.map((q) => ({ x: q.idx, y: q.timeSinceStartInS })),
+      showLine: false,
+      pointStyle: "rect",
+      pointRadius: 4,
+      pointBackgroundColor: cssVar("--muted"),
+      borderColor: cssVar("--muted"),
+    });
+  }
+
+  if (opts.events) {
+    datasets.push({
+      label: "Visit",
+      data: visitEvents,
+      showLine: false,
+      pointStyle: "circle",
+      pointRadius: 5,
+      pointBackgroundColor: "transparent",
+      borderColor: cssVar("--visit"),
+      borderWidth: 1.5,
+    });
+  }
+
+  if (opts.timeline) {
+    datasets.push({
+      label: "Diff",
+      type: "line",
+      data: questions.filter((q) => q.questionTimeDiff !== undefined).map((q) => ({ x: q.idx, y: q.questionTimeDiff })),
+      borderColor: cssVar("--diff"),
+      backgroundColor: cssVar("--diff"),
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0.3,
+      yAxisID: "y1",
+    });
+  }
+
+  // Bracket layer: connects each consecutive answered pair at their peak
+  // height, labeled with the time delta between them.
+  const bracketPairs = [];
+  if (opts.diff) {
+    for (let i = 1; i < questions.length; i++) {
+      const prev = questions[i - 1];
+      const entry = questions[i];
+      if (prev.timeSinceStartInS == null || entry.timeSinceStartInS == null) continue;
+      bracketPairs.push({
+        prevIdx: prev.idx,
+        idx: entry.idx,
+        peak: Math.max(prev.timeSinceStartInS, entry.timeSinceStartInS),
+        diff: entry.timeSinceStartInS - prev.timeSinceStartInS,
+      });
+    }
+  }
+
+  // Unfocused bands: full-width horizontal boxes (no xMin/xMax => spans the
+  // whole plotted x-range), one per BLUR->FOCUS pair.
+  const annotations = {};
+  if (opts.events) {
+    focusGaps.forEach((f, i) => {
+      const isPreFinal = f.focusTime <= timeToComplete;
+      const dur = f.focusTime - f.blurTime;
+      annotations[`gap${i}`] = {
+        type: "box",
+        yMin: f.blurTime,
+        yMax: f.focusTime,
+        backgroundColor: withAlpha(cssVar("--unfocused"), 0.11),
+        borderColor: withAlpha(cssVar("--unfocused"), 0.6),
+        borderWidth: 1,
+        label: {
+          display: false,
+          content: `${dur.toFixed(1)}s unfocused${isPreFinal ? "" : " (after final submission)"}`,
+          position: { x: "start", y: "center" },
+          xAdjust: 8,
+          color: "#fff",
+          backgroundColor: "rgba(20, 20, 24, 0.85)",
+          font: { size: 11 },
+          padding: 4,
+        },
+        enter({ element }) {
+          element.label.options.display = true;
+          chart.update("none");
+        },
+        leave({ element }) {
+          element.label.options.display = false;
+          chart.update("none");
+        },
+      };
+    });
+  }
+
+  const ctx = document.getElementById("chart").getContext("2d");
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: "scatter",
+    data: { datasets },
+    options: {
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: true, text: "question number" },
+          ticks: { stepSize: 1, precision: 0 },
+          grid: { color: cssVar("--border") },
+        },
+        y: {
+          type: "linear",
+          min: yZoomDomain ? yZoomDomain[0] : 0,
+          max: yZoomDomain ? yZoomDomain[1] : undefined,
+          title: { display: true, text: "seconds since start" },
+          grid: { color: cssVar("--border") },
+        },
+        y1: opts.timeline
+          ? {
+              type: "linear",
+              position: "right",
+              title: { display: true, text: "diff [s]" },
+              grid: { drawOnChartArea: false },
+            }
+          : { display: false },
+      },
+      plugins: {
+        legend: { display: false },
+        bracketLayer: { pairs: bracketPairs },
+        annotation: { annotations },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.y?.toFixed?.(2)}s`,
+          },
+        },
+      },
+    },
+  });
+
+  setupZoomDrag();
+}
+
+function renderLegend(opts, hasUnknown) {
+  const items = [
+    { glyph: "dot", color: cssVar("--correct"), label: "Correct" },
+    { glyph: "cross", color: cssVar("--incorrect"), label: "Incorrect" },
+  ];
+  if (hasUnknown) items.push({ glyph: "square", color: cssVar("--muted"), label: "Unknown" });
+  if (opts.events) {
+    items.push({ glyph: "ring", color: cssVar("--visit"), label: "Visit" });
+    items.push({ glyph: "band", color: cssVar("--unfocused"), label: "Unfocussed" });
+  }
+  if (opts.timeline) items.push({ glyph: "line", color: cssVar("--diff"), label: "Diff" });
+  if (opts.diff) items.push({ glyph: "bracket", color: cssVar("--diff"), label: "Diff bracket" });
+
+  document.getElementById("legend").innerHTML = items.map((i) => `<span class="legend-key">${glyphSvg(i.glyph, i.color)}${i.label}</span>`).join("");
+}
+
+function glyphSvg(glyph, color) {
+  const shapes = {
+    dot: `<circle cx="7" cy="7" r="4.5" fill="${color}"/>`,
+    cross: `<path d="M3.5 3.5 L10.5 10.5 M3.5 10.5 L10.5 3.5" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>`,
+    ring: `<circle cx="7" cy="7" r="4" fill="none" stroke="${color}" stroke-width="1.5"/>`,
+    band: `<rect x="1" y="3" width="12" height="8" rx="1" fill="${color}" opacity="0.25"/>`,
+    line: `<path d="M1 7 H13" stroke="${color}" stroke-width="2" stroke-linecap="round"/>`,
+    square: `<rect x="3" y="3" width="8" height="8" fill="${color}"/>`,
+    bracket: `<path d="M2 11 V7 H12 V11" stroke="${color}" stroke-width="1.5" fill="none"/>`,
+  };
+  return `<svg width="14" height="14" viewBox="0 0 14 14">${shapes[glyph] ?? ""}</svg>`;
+}
+
+function fmtScore(v) {
+  return v == null ? "n/a" : v.toFixed(3);
+}
+
+function renderStats(s) {
+  const mod = s.moderationScore;
+  const prev = s.prevModerationScore;
+  const modDelta = mod != null && prev != null ? mod - prev : null;
+  const tiles = [
+    {
+      label: "Moderation score",
+      value: fmtScore(mod),
+      unit: modDelta != null ? `${modDelta >= 0 ? "+" : ""}${modDelta.toFixed(3)}` : undefined,
+      sub: `prev ${fmtScore(prev)}`,
+      scoreBar: mod != null ? mod * 100 : undefined,
+    },
+    { label: "Score", value: `${s.correct} / ${s.totalQuestions}`, sub: `${s.answered} answered`, scoreBar: s.scorePct },
+    { label: "Duration", value: secondsToHuman(s.timeToComplete), sub: `${s.timeToComplete.toFixed(0)}s` },
+    { label: "Time / question", value: `${s.medianTimePerQuestion}s`, unit: "median", sub: `mean ${s.averageTimePerQuestion}s` },
+    {
+      label: "Unfocussed pre-final",
+      value: `${s.unfocussedBeforeFinal.toFixed(1)}s`,
+      unit: `${s.unfocussedPct.toFixed(1)}%`,
+      sub: `total ${s.totalUnfocussedTime.toFixed(1)}s · median ${s.medianUnfocussedBeforeFinal.toFixed(1)}s`,
+    },
+    { label: "Events", value: String(s.eventsCount), sub: `# periods: ${s.preFinalGapsCount}` },
+  ];
+
+  document.getElementById("stats").innerHTML = tiles
+    .map(
+      (t) => `
+      <div class="stat-tile">
+        <div class="stat-label">${t.label}</div>
+        <div class="stat-value">${t.value}${t.unit ? `<span class="stat-unit">${t.unit}</span>` : ""}</div>
+        ${t.scoreBar !== undefined ? `<div class="score-bar"><div style="width:${t.scoreBar}%"></div></div>` : ""}
+        ${t.sub ? `<div class="stat-sub">${t.sub}</div>` : ""}
+      </div>`,
+    )
+    .join("");
+}
+
+function setupZoomDrag() {
+  const canvas = document.getElementById("chart");
+  const resetBtn = document.getElementById("reset-zoom");
+  let dragStart = null;
+
+  resetBtn.onclick = () => {
+    yZoomDomain = null;
+    resetBtn.style.display = "none";
+    document.getElementById("zoom-note").style.display = "inline";
+    refresh();
+  };
+
+  canvas.onmousedown = (e) => {
+    dragStart = e.offsetY;
+  };
+  canvas.onmouseup = (e) => {
+    if (dragStart === null) return;
+    const dragEnd = e.offsetY;
+    if (Math.abs(dragEnd - dragStart) > 5) {
+      const yScale = chart.scales.y;
+      const v1 = yScale.getValueForPixel(dragStart);
+      const v2 = yScale.getValueForPixel(dragEnd);
+      yZoomDomain = [Math.floor(Math.min(v1, v2)), Math.ceil(Math.max(v1, v2))];
+      resetBtn.textContent = `Reset Zoom (${yZoomDomain[0]}s - ${yZoomDomain[1]}s)`;
+      resetBtn.style.display = "inline-block";
+      document.getElementById("zoom-note").style.display = "none";
+      refresh();
+    }
+    dragStart = null;
+  };
+}
+
+function refresh() {
+  if (currentAttempt) render(currentAttempt);
+}
+
+async function main() {
+  let attempts;
+  try {
+    const res = await fetch("data.json");
+    if (!res.ok) throw new Error(res.statusText);
+    attempts = await res.json();
+  } catch (err) {
+    document.getElementById("empty").style.display = "block";
+    return;
+  }
+
+  const select = document.getElementById("attempt-select");
+  const filterInput = document.getElementById("filter");
+
+  function select_attempt(attempt) {
+    currentAttempt = attempt;
+    yZoomDomain = null;
+    render(attempt);
+  }
+
+  function populate(filterText) {
+    const filtered = filterText
+      ? attempts.filter((a) => a.attemptId.includes(filterText) || (a.examId ?? "").includes(filterText))
+      : attempts;
+    select.innerHTML = filtered
+      .map((a) => `<option value="${a.attemptId}">${a.examName ?? a.attemptId} — mod ${a.moderationScore?.toFixed(3) ?? "n/a"} (prev ${a.prevModerationScore?.toFixed(3) ?? "n/a"})</option>`)
+      .join("");
+    if (filtered.length) select_attempt(filtered[0]);
+  }
+
+  select.addEventListener("change", () => {
+    const attempt = attempts.find((a) => a.attemptId === select.value);
+    if (attempt) select_attempt(attempt);
+  });
+
+  filterInput.addEventListener("input", () => populate(filterInput.value.trim()));
+
+  for (const id of ["toggle-diff", "toggle-sort", "toggle-timeline", "toggle-events"]) {
+    document.getElementById(id).addEventListener("change", refresh);
+  }
+
+  populate("");
+}
+
+main();
+</script>
+</body>
+</html>

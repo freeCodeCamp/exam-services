@@ -4,7 +4,7 @@ version = "3.0.0"
 edition = "2024"
 
 [dependencies]
-bson = { version = "3.1.0", features = ["serde", "serde_with-3"] }
+bson = { version = "3.1.0", features = ["serde", "serde_with-3", "chrono-0_4"] }
 # `prisma` is used for its types only. Native consumers get the `db` module
 # from their own direct `prisma` dependency.
 prisma = { path = "../prisma", default-features = false }

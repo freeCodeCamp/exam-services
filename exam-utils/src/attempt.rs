@@ -1,10 +1,10 @@
-use bson::oid::ObjectId;
+use bson::{DateTime, oid::ObjectId};
 use prisma::{
     self,
     supabase::{Event, EventKind},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use crate::error::Error;
 
@@ -186,7 +186,13 @@ pub struct TimeToAnswer {
 
 pub struct QuestionBlurPeriods {
     pub question_id: ObjectId,
-    pub periods: Vec<f64>,
+    pub periods: Vec<Period>,
+}
+
+#[derive(Clone)]
+pub struct Period {
+    pub start: DateTime,
+    pub end: DateTime,
 }
 
 pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
@@ -197,11 +203,7 @@ pub fn get_attempt_stats(_attempt: Attempt) -> AttemptStats {
 ///
 /// - A score of 0.0 means the attempt definitely does **not** need moderation.
 /// - A score of 1.0 means the attempt definitely does need moderation.
-///
-///
 pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f64, Error> {
-    // (1 / number of parts)
-    let weight = 0.3333;
     let mut moderation_score = 0.0;
     let mut total_blur_time = 0.0;
     let mut total_blur_time_before_last_answer = 0.0;
@@ -223,57 +225,6 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
             return Ok(moderation_score);
         }
     };
-
-    let mut blur_periods: Vec<QuestionBlurPeriods> = vec![];
-    let mut pending_blur: HashMap<ObjectId, _> = HashMap::new();
-    for event in events {
-        let timestamp = event.timestamp;
-        let Some(question_id) = event
-            .meta
-            .get("question")
-            .and_then(|v| v.as_str())
-            .and_then(|s| ObjectId::parse_str(s).ok())
-        else {
-            continue;
-        };
-
-        match event.kind {
-            EventKind::Blur => {
-                pending_blur.entry(question_id).or_insert(timestamp);
-            }
-            EventKind::Focus => {
-                if let Some(blur_start) = pending_blur.remove(&question_id) {
-                    let blur_time = (timestamp - blur_start).as_seconds_f64();
-                    total_blur_time += blur_time;
-
-                    if timestamp.timestamp_millis() < last_submission_time.timestamp_millis() {
-                        total_blur_time_before_last_answer += blur_time;
-                    }
-
-                    match blur_periods
-                        .iter_mut()
-                        .find(|q| q.question_id == question_id)
-                    {
-                        Some(q) => q.periods.push(blur_time),
-                        None => blur_periods.push(QuestionBlurPeriods {
-                            question_id,
-                            periods: vec![blur_time],
-                        }),
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if !pending_blur.is_empty() {
-        return Err(Error::ModerationScore(format!(
-            "{} blurs with no matching re-focus event: \n{:?}\n{:?}",
-            pending_blur.len(),
-            pending_blur,
-            last_submission_time
-        )));
-    }
 
     // Time taken to answer all questions -> does not include checking over answers / waiting before exiting
     let total_time_taken = last_submission_time
@@ -299,22 +250,74 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
         )));
     }
 
-    let time_weight = ((total_time - total_time_taken) / total_time) * weight;
-    if time_weight > weight {
-        return Err(Error::ModerationScore(format!(
-            "time weight > weight: {time_weight} > {weight}"
-        )));
-    }
-    moderation_score += time_weight;
+    // let time_weight = ((total_time - total_time_taken) / total_time) * weight;
+    // if time_weight > weight {
+    //     return Err(Error::ModerationScore(format!(
+    //         "time weight > weight: {time_weight} > {weight}"
+    //     )));
+    // }
+    // moderation_score += time_weight;
 
-    let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
-    if blur_before_weight > weight * 2.0 {
-        return Err(Error::ModerationScore(format!(
-            "blur before weight > weight: {blur_before_weight} > {}",
-            weight * 2.0
-        )));
+    // Median Time Taken to Answer Per Question - LOW->HIGH
+    let mut time_per_question = get_time_per_question(&events);
+    time_per_question.sort();
+    let median_time_per_question = time_per_question.median();
+
+    // Number of Questions Blurred - HIGH
+    let blur_periods = get_blur_periods(&events);
+    let blur_periods_before = blur_periods
+        .iter()
+        .filter_map(|bp| {
+            let periods = bp.periods.clone();
+            let periods_before = periods
+                .into_iter()
+                .filter(|p| p.start < last_submission_time)
+                .collect::<Vec<_>>();
+            if periods_before.is_empty() {
+                return None;
+            }
+
+            Some(QuestionBlurPeriods {
+                question_id: bp.question_id,
+                periods: periods_before,
+            })
+        })
+        .collect::<Vec<_>>();
+    let num_questions_blurred_before = blur_periods_before.len();
+
+    let mut total_blur_per_question = Vec::new();
+    for qbp in blur_periods_before {
+        let mut question_blur_times = Vec::new();
+        for q in qbp.periods {
+            let time = q
+                .end
+                .checked_duration_since(q.start)
+                .expect("question blur period start to be before end");
+            question_blur_times.push(time);
+        }
+        let total_question_blur = question_blur_times
+            .into_iter()
+            .reduce(|acc, curr| acc.saturating_add(curr))
+            .expect("one or more question blur times after filter");
+        total_blur_per_question.push(total_question_blur);
     }
-    moderation_score += blur_before_weight;
+    // Median Time Blurred Per Question - LOW
+    let median = total_blur_per_question.median();
+    // Total Time Blurred Before Last Answer - MEDIUM
+    let total_time_blurred_before = total_blur_per_question
+        .into_iter()
+        .reduce(|acc, curr| acc.saturating_add(curr));
+
+    // let blur_before_weight = (total_blur_time_before_last_answer / total_time_taken) * weight * 2.0;
+    // if blur_before_weight > weight * 2.0 {
+    //     return Err(Error::ModerationScore(format!(
+    //         r#"blur before weight > weight: {blur_before_weight} > {}
+    //         | blur before last | total time taken |
+    //         | {total_blur_time_before_last_answer} | {total_time_taken} |"#,
+    //         weight * 2.0
+    //     )));
+    // }
+    // moderation_score += blur_before_weight;
 
     if moderation_score > 1.0 {
         tracing::error!(
@@ -325,6 +328,215 @@ pub fn get_moderation_score(attempt: &Attempt, events: &Vec<Event>) -> Result<f6
     }
 
     Ok(moderation_score)
+}
+
+trait Median<T> {
+    fn median(&self) -> Option<T>;
+}
+
+impl<T: Ord + Copy + std::ops::Add<Output = T> + std::ops::Div<u32, Output = T>> Median<T>
+    for [T]
+{
+    fn median(&self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut sorted = self.to_vec();
+        sorted.sort();
+        let midpoint = sorted.len() / 2;
+        Some(if sorted.len() % 2 == 0 {
+            (sorted[midpoint - 1] + sorted[midpoint]) / 2
+        } else {
+            sorted[midpoint]
+        })
+    }
+}
+
+/// Needs to be fault-tolerant for missing events
+/// Time on question = sum(navigation timestamps)
+/// TODO: Consider adding attempt data as fallback for any missing events
+pub fn get_time_per_question(events: &Vec<Event>) -> Vec<Duration> {
+    let mut events = events.clone();
+    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+    let mut totals: Vec<(ObjectId, Duration)> = vec![];
+    let mut pending_visit = None;
+
+    for event in &events {
+        if !matches!(event.kind, EventKind::QuestionVisit) {
+            continue;
+        }
+        let Some(question_id) = event
+            .meta
+            .get("question")
+            .and_then(|v| v.as_str())
+            .and_then(|s| ObjectId::parse_str(s).ok())
+        else {
+            continue;
+        };
+
+        // Closes the previous visit on arrival at the next one: time on a
+        // question is the span between consecutive QuestionVisit events.
+        if let Some((visit_start, prev_question_id)) = pending_visit.take() {
+            let delta = event.timestamp.signed_duration_since(visit_start);
+            let elapsed = delta.to_std().unwrap_or(Duration::ZERO);
+
+            match totals.iter_mut().find(|(id, _)| *id == prev_question_id) {
+                Some((_, total)) => *total += elapsed,
+                None => totals.push((prev_question_id, elapsed)),
+            }
+        }
+
+        pending_visit = Some((event.timestamp, question_id));
+    }
+    // A trailing pending visit (the last question shown) has no closing
+    // event: its end is unknown, so - fault-tolerant to missing events -
+    // it is dropped rather than guessed at, mirroring `get_blur_periods`.
+
+    totals.into_iter().map(|(_, duration)| duration).collect()
+}
+
+pub fn get_total_time(attempt: &Attempt) -> Duration {
+    let last_submission_time = get_last_submission_time(&attempt);
+    last_submission_time.saturating_duration_since(attempt.start_time)
+}
+
+/// TODO: Test for fault-tolerance
+///       - What happens in cases where events are not recorded well
+///       - e.g. question navigation/answer during blur period
+pub fn get_blur_periods(events: &Vec<Event>) -> Vec<QuestionBlurPeriods> {
+    // Blur/Focus are window-level (tab focus lost/regained), not per-question:
+    // "meta.question" only annotates which question happened to be showing at
+    // that moment. Bucketing pairs by question (as a prior version of this
+    // function did) treats navigating between questions as if each question
+    // tracked its own independent focus state, so a blur left pending on
+    // question A while the user moves on to answer B..Z is only "closed" once
+    // the user happens to revisit A - counting that entire in-between span
+    // (during which the tab was actually focused, just on other questions) as
+    // blur time. Those spans overlap across questions, so summed blur time can
+    // exceed the attempt's actual wall-clock duration. Pair chronologically
+    // across the whole event stream instead: at any instant the tab is either
+    // focused or blurred, never both.
+    let mut blur_periods: Vec<QuestionBlurPeriods> = vec![];
+    let mut pending_blur = None;
+    for event in events {
+        if !matches!(event.kind, EventKind::Blur | EventKind::Focus) {
+            continue;
+        }
+        let Some(question_id) = event
+            .meta
+            .get("question")
+            .and_then(|v| v.as_str())
+            .and_then(|s| ObjectId::parse_str(s).ok())
+        else {
+            continue;
+        };
+
+        match event.kind {
+            EventKind::Blur => {
+                // A second blur before a focus closes the first: keep the
+                // earlier start, treat it as one continuous blur period.
+                pending_blur.get_or_insert((event.timestamp, question_id));
+            }
+            EventKind::Focus => {
+                // A focus with no pending blur has no matching pair: ignore it.
+                if let Some((blur_start, blur_question_id)) = pending_blur.take() {
+                    let timestamp = event.timestamp;
+                    // let blur_time = (timestamp - blur_start).as_seconds_f64();
+                    let period = Period {
+                        start: blur_start.into(),
+                        end: timestamp.into(),
+                    };
+
+                    match blur_periods
+                        .iter_mut()
+                        .find(|q| q.question_id == blur_question_id)
+                    {
+                        Some(q) => q.periods.push(period),
+                        None => blur_periods.push(QuestionBlurPeriods {
+                            question_id: blur_question_id,
+                            periods: vec![period],
+                        }),
+                    }
+                }
+            }
+            _ => unreachable!("filtered to only Blur/Focus events above"),
+        }
+    }
+    // A trailing pending blur with no closing focus has no matching pair:
+    // its end is unknown, so it is dropped rather than guessed at.
+    blur_periods
+}
+
+pub fn get_total_blur_time(events: &Vec<Event>) -> f64 {
+    let mut total_blur_time = 0.0;
+    let mut prev_blur = None;
+    let mut events = events.clone();
+    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    for event in &events {
+        match event.kind {
+            EventKind::Blur => {
+                if prev_blur.is_none() {
+                    prev_blur = Some(event.timestamp);
+                }
+            }
+            EventKind::Focus => {
+                // A focus with no pending blur has no matching pair: ignore it.
+                if let Some(prev) = prev_blur {
+                    let timestamp = event.timestamp;
+                    let blur_time = (timestamp - prev).as_seconds_f64();
+                    total_blur_time += blur_time;
+                    prev_blur = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    total_blur_time
+}
+
+pub fn get_total_blur_time_before_last_answer(attempt: &Attempt, events: &Vec<Event>) -> f64 {
+    let mut total_blur_time_before_last_answer = 0.0;
+
+    let last_submission_time = get_last_submission_time(&attempt);
+
+    let mut prev_blur = None;
+    let mut events = events.clone();
+    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    for event in &events {
+        match event.kind {
+            EventKind::Blur => {
+                if prev_blur.is_none() {
+                    prev_blur = Some(event.timestamp);
+                }
+            }
+            EventKind::Focus => {
+                // A focus with no pending blur has no matching pair: ignore it.
+                if let Some(prev) = prev_blur {
+                    let timestamp = event.timestamp;
+
+                    if timestamp.timestamp_millis() < last_submission_time.timestamp_millis() {
+                        let blur_time = (timestamp - prev).as_seconds_f64();
+                        total_blur_time_before_last_answer += blur_time;
+                    }
+                    prev_blur = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    total_blur_time_before_last_answer
+}
+
+pub fn get_last_submission_time(attempt: &Attempt) -> DateTime {
+    attempt
+        .question_sets
+        .iter()
+        .flat_map(|qs| qs.questions.iter().flat_map(|q| q.submission_time))
+        .max()
+        .expect("at least one question to have been answered")
 }
 
 #[cfg(test)]
@@ -388,9 +600,15 @@ mod tests {
 
             let attempt = construct_attempt(&exam, &generation, &attempt);
 
-            let score = get_moderation_score(&attempt, &events)
+            let score = match get_moderation_score(&attempt, &events)
                 .map_err(|e| format!("{}: {e}", attempt.id))
-                .unwrap();
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    println!("{}", e);
+                    panic!("score calc error");
+                }
+            };
 
             if score < min {
                 min = score;

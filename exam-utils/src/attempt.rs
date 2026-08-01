@@ -1050,19 +1050,17 @@ mod logic {
             ev(EventKind::QuestionVisit, Some(q1), 12_000),
         ];
         // 10_000 - 8_000 (latest visit at/before submission)
-        assert_eq!(get_time_per_question(&a, &events), vec![Duration::from_secs(2)]);
+        assert_eq!(
+            get_time_per_question(&a, &events),
+            vec![Duration::from_secs(2)]
+        );
     }
 
     #[test]
     fn time_per_question_falls_back_to_nearest_earlier_submission_then_start() {
         let q1 = oid(1);
         let q2 = oid(2);
-        let a = attempt_with(
-            0,
-            100,
-            80.0,
-            vec![q(q1, Some(5_000)), q(q2, Some(12_000))],
-        );
+        let a = attempt_with(0, 100, 80.0, vec![q(q1, Some(5_000)), q(q2, Some(12_000))]);
         // No visits:
         //   q1 -> no earlier other submission -> start_time(0)      => 5s
         //   q2 -> nearest earlier other submission is q1 @5s        => 7s
@@ -1080,7 +1078,10 @@ mod logic {
         // Visit belongs to q2, which is unanswered (omitted); q1 has no own
         // visit and no earlier other submission -> start_time(0) => 6s.
         let events = vec![ev(EventKind::QuestionVisit, Some(q2), 3_000)];
-        assert_eq!(get_time_per_question(&a, &events), vec![Duration::from_secs(6)]);
+        assert_eq!(
+            get_time_per_question(&a, &events),
+            vec![Duration::from_secs(6)]
+        );
     }
 
     // ---- get_blur_periods -------------------------------------------------

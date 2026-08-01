@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use exam_utils::{
     attempt::{construct_attempt, get_moderation_score},
     misc::check_attempt_pass,
+    moderation_versions::v1_pre_bc6af64,
 };
 use prisma::{
     ExamEnvironmentChallenge, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
@@ -147,7 +148,19 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 let events = get_events_for_attempt(&supabase, &attempt.id).await?;
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
-                match get_moderation_score(&attempt, &events) {
+
+                // TEMP: Using old `moderation_score` algorithm alongside new
+                let start = std::time::Instant::now();
+                let v1_result = v1_pre_bc6af64(&attempt, &events);
+                sentry::metrics::distribution(
+                    "exam_service.moderation_score_duration",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                )
+                .unit(sentry::protocol::Unit::Millisecond)
+                .attribute("version", "v1_pre_bc6af64")
+                .capture();
+
+                match v1_result {
                     Ok(moderation_score) => {
                         sentry::metrics::distribution(
                             "exam_service.moderation_score",
@@ -161,7 +174,6 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                             // Set to true to avoid another check for whether the attempt passed or not.
                             exam_moderation.challenges_awarded = true;
                             exam_moderation.moderation_date = Some(now);
-                            exam_moderation.moderation_score = Some(moderation_score);
                             exam_moderation.feedback = Some(format!("Auto Approved"));
                         } else {
                             num_attempts_above_moderation_threshold += 1;
@@ -171,11 +183,32 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                     }
                     Err(e) => {
                         num_score_errors += 1;
-                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
+                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate legacy moderation score");
                         exam_moderation.feedback =
                             Some(format!("Moderation score calculation error."));
                     }
                 };
+
+                // Newest algorithm. Just shown in Exam Creator UI - not used to determine placement
+                // TODO: Consider using Sentry metrics to track change in moderation score
+                let start = std::time::Instant::now();
+                let current_result = get_moderation_score(&attempt, &events);
+                sentry::metrics::distribution(
+                    "exam_service.moderation_score_duration",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                )
+                .unit(sentry::protocol::Unit::Millisecond)
+                .attribute("version", "current")
+                .capture();
+
+                match current_result {
+                    Ok(moderation_score) => {
+                        exam_moderation.moderation_score = Some(moderation_score);
+                    }
+                    Err(e) => {
+                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
+                    }
+                }
             }
 
             // Create a moderation entry

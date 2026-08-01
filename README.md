@@ -38,6 +38,33 @@ A specific version of `rustc` is used, because the test tooling requires nightly
 cargo +nightly-2025-04-03 test
 ```
 
+## Exam Utils
+
+### Moderation score regression harness
+
+`get_moderation_score` is high-risk. Every algorithm version is registered in
+[`moderation_versions.rs`](./exam-utils/src/moderation_versions.rs) and run over a
+committed, PII-free scenario catalog ([`testdata/moderation/scenarios/`](./exam-utils/testdata/moderation/scenarios/)).
+Runs in CI ([`test-exam-utils.yml`](./.github/workflows/test-exam-utils.yml)); no nightly, no DB.
+
+```bash
+# Gate + report (report.html written to testdata/moderation/, git-ignored).
+cargo test -p exam-utils
+```
+
+- **Gate**: `moderation_scores_golden` asserts scores match `scores.golden`. A change to a live version (or edit to a frozen one) fails it.
+- **Report**: open `exam-utils/testdata/moderation/report.html` — per-version scores, deltas, threshold crossings. Includes real attempts if a local `fixtures/` dump exists.
+
+Change the algorithm → review the drift → regenerate the golden:
+
+```bash
+UPDATE_GOLDEN=1 cargo test -p exam-utils moderation_scores_golden
+git diff exam-utils/testdata/moderation/scores.golden
+```
+
+Add a case: drop a JSON file in `scenarios/`, then `UPDATE_GOLDEN=1`.
+Add a version (when changing the algorithm): freeze the old body as `vN_<sha>` in `moderation_versions.rs`, append to `VERSIONS`, then `UPDATE_GOLDEN=1` — see that file's header.
+
 ## JS API
 
 WASM bindings for `exam-utils`, consumable from Node.js and browsers. See [`js-api/README.md`](./js-api/README.md) for the API reference and consumption docs.

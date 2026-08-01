@@ -1,0 +1,12 @@
+{
+  "name": "nothing_answered",
+  "description": "No question submitted. Both versions short-circuit to 0.0 (the theoretically-impossible no-answers guard).",
+  "totalTimeInS": 100,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    {},
+    {}
+  ],
+  "events": []
+}

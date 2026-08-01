@@ -1,0 +1,27 @@
+{
+  "name": "heavy_blur",
+  "description": "10 questions 6s apart; 3 distinct questions blurred (tab lost focus) before the last answer. v2 blurred-fraction term saturates the component: 30% of questions with an 80% pass mark => 0.25.",
+  "totalTimeInS": 500,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 6000 },
+    { "submissionMs": 12000 },
+    { "submissionMs": 18000 },
+    { "submissionMs": 24000 },
+    { "submissionMs": 30000 },
+    { "submissionMs": 36000 },
+    { "submissionMs": 42000 },
+    { "submissionMs": 48000 },
+    { "submissionMs": 54000 },
+    { "submissionMs": 60000 }
+  ],
+  "events": [
+    { "kind": "BLUR", "question": 1, "atMs": 10000 },
+    { "kind": "FOCUS", "question": 1, "atMs": 12000 },
+    { "kind": "BLUR", "question": 2, "atMs": 20000 },
+    { "kind": "FOCUS", "question": 2, "atMs": 22000 },
+    { "kind": "BLUR", "question": 3, "atMs": 30000 },
+    { "kind": "FOCUS", "question": 3, "atMs": 32000 }
+  ]
+}

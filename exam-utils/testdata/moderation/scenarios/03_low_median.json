@@ -1,0 +1,13 @@
+{
+  "name": "low_median",
+  "description": "Percent-of-time stays >=10% (no fast term) but every question is answered in ~1s, so only the low-median term fires. v2 = 0.2.",
+  "totalTimeInS": 10,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 1000 },
+    { "submissionMs": 2000 },
+    { "submissionMs": 3000 }
+  ],
+  "events": []
+}

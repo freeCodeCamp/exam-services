@@ -4,3 +4,6 @@ target/
 fixtures/
 js-api/pkg/
 fixtures-viewer/data.json
+# Generated on each `cargo test -p exam-utils` (and uploaded by CI). Regenerable,
+# and may embed local real-fixture rows, so it stays out of version control.
+exam-utils/testdata/moderation/report.html

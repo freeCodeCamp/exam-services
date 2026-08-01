@@ -1,0 +1,43 @@
+name: Test Exam Utils
+
+on:
+  pull_request:
+    paths:
+      - "exam-utils/**"
+      - "prisma/**"
+      - ".cargo/**"
+      - ".github/workflows/test-exam-utils.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit Tests and Moderation Report
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Runs the synthetic unit tests, the moderation-score golden gate
+      # (fails on any un-regenerated drift in a live version, or an accidental
+      # edit to a frozen version), and regenerates the HTML comparison report.
+      - name: Test exam-utils
+        run: cargo test -p exam-utils
+
+      # Uploaded on success AND failure - the report is most useful when the
+      # gate fails, to see exactly which scenarios moved.
+      - name: Upload moderation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moderation-report
+          path: exam-utils/testdata/moderation/report.html
+          if-no-files-found: ignore

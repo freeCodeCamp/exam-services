@@ -1,0 +1,21 @@
+# Moderation-score golden - DO NOT hand-edit.
+# Regenerate: UPDATE_GOLDEN=1 cargo test -p exam-utils moderation_scores_golden
+# Format: <scenario> | <version> | <score|ERR:msg>
+boundary_10pct | v1 @bc6af64^ | 0.2250
+boundary_10pct | v2 @HEAD | 0.0000
+clean_pass | v1 @bc6af64^ | 0.1900
+clean_pass | v2 @HEAD | 0.0000
+fast_completion | v1 @bc6af64^ | 0.2475
+fast_completion | v2 @HEAD | 0.2250
+heavy_blur | v1 @bc6af64^ | 0.2730
+heavy_blur | v2 @HEAD | 0.2500
+low_median | v1 @bc6af64^ | 0.1750
+low_median | v2 @HEAD | 0.2000
+mixed_realistic | v1 @bc6af64^ | 0.4167
+mixed_realistic | v2 @HEAD | 0.1667
+nothing_answered | v1 @bc6af64^ | 0.0000
+nothing_answered | v2 @HEAD | 0.0000
+time_exceeds_total | v1 @bc6af64^ | ERR:total time taken > than total time: 20 > 10
+time_exceeds_total | v2 @HEAD | ERR:total time taken > than total time: 20 > 10
+visits_tracked | v1 @bc6af64^ | 0.0250
+visits_tracked | v2 @HEAD | 0.1500

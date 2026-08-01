@@ -1,0 +1,18 @@
+{
+  "name": "mixed_realistic",
+  "description": "5 questions 30s apart; one question sits blurred for a long single stretch (30s->100s) before the last answer. Shows the count-vs-time blur change: v1 (blur TIME) flags this (>=0.25); v2 (blurred-question COUNT) clears it (<0.25) -> NOW-CLEARED.",
+  "totalTimeInS": 300,
+  "passingPercent": 70,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 30000 },
+    { "submissionMs": 60000 },
+    { "submissionMs": 90000 },
+    { "submissionMs": 120000 },
+    { "submissionMs": 150000 }
+  ],
+  "events": [
+    { "kind": "BLUR", "question": 1, "atMs": 30000 },
+    { "kind": "FOCUS", "question": 1, "atMs": 100000 }
+  ]
+}

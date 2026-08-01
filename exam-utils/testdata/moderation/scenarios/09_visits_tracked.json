@@ -1,0 +1,17 @@
+{
+  "name": "visits_tracked",
+  "description": "QuestionVisit events present, so per-question time is measured from the latest visit at/before submission (not the fallback). Two of three questions answered ~2s after their visit -> low median. v2 = 0.15.",
+  "totalTimeInS": 100,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 30000 },
+    { "submissionMs": 60000 },
+    { "submissionMs": 90000 }
+  ],
+  "events": [
+    { "kind": "QUESTION_VISIT", "question": 1, "atMs": 25000 },
+    { "kind": "QUESTION_VISIT", "question": 2, "atMs": 58000 },
+    { "kind": "QUESTION_VISIT", "question": 3, "atMs": 88000 }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "boundary_10pct",
+  "description": "Completion sits exactly at the 10% cutoff and median exactly at 5s. Both v2 terms use strict '<', so neither fires. v2 = 0. Guards the boundary against off-by-one drift.",
+  "totalTimeInS": 100,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 5000 },
+    { "submissionMs": 10000 }
+  ],
+  "events": []
+}

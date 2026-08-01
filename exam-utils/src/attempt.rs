@@ -865,3 +865,605 @@ mod tests {
         println!();
     }
 }
+
+/// Synthetic, fixture-independent unit tests for the pure attempt logic.
+///
+/// These build minimal `Attempt`/`Event` values by hand so each scoring
+/// component and helper is exercised in isolation with exact expected values -
+/// unlike the fixture aggregate tests above, which only bound the output range.
+///
+/// `get_time_between_submissions` and `get_attempt_stats` are `todo!()` stubs
+/// and so are intentionally not covered here.
+#[cfg(test)]
+mod logic {
+    use bson::{DateTime, oid::ObjectId};
+    use prisma::{
+        ExamEnvironmentAnswer, ExamEnvironmentConfig, ExamEnvironmentExam,
+        ExamEnvironmentExamAttempt, ExamEnvironmentGeneratedExam,
+        ExamEnvironmentMultipleChoiceQuestion, ExamEnvironmentMultipleChoiceQuestionAttempt,
+        ExamEnvironmentQuestionSet, ExamEnvironmentQuestionSetAttempt,
+        supabase::{Event, EventKind},
+    };
+    use std::time::Duration;
+
+    use crate::attempt::{
+        Attempt, AttemptQuestionSet, AttemptQuestionSetQuestion, Median, construct_attempt,
+        get_blur_periods, get_last_submission_time, get_moderation_score, get_time_per_question,
+        get_total_blur_time, get_total_blur_time_before_last_answer, get_total_time,
+    };
+    use crate::error::Error;
+
+    /// Fixed epoch offset - keeps timestamps well clear of 0 so nothing
+    /// accidentally saturates against the Unix epoch.
+    const T0: i64 = 1_700_000_000_000;
+
+    /// Deterministic distinct `ObjectId` from a small index.
+    fn oid(n: u8) -> ObjectId {
+        let mut bytes = [0u8; 12];
+        bytes[11] = n;
+        ObjectId::from_bytes(bytes)
+    }
+
+    /// `bson::DateTime` at `T0 + ms`.
+    fn bdt(ms: i64) -> DateTime {
+        DateTime::from_millis(T0 + ms)
+    }
+
+    /// Build an event at `T0 + ms`. `question` populates `meta.question`; `None`
+    /// leaves `meta` empty (exercises the missing-meta skip path).
+    fn ev(kind: EventKind, question: Option<ObjectId>, ms: i64) -> Event {
+        Event {
+            id: String::from("evt"),
+            // bson -> chrono keeps whole-millisecond precision, so it round-trips
+            // exactly against the bson submission times used below.
+            timestamp: DateTime::from_millis(T0 + ms).to_chrono(),
+            kind,
+            meta: match question {
+                Some(qid) => serde_json::json!({ "question": qid.to_hex() }),
+                None => serde_json::json!({}),
+            },
+            attempt_id: oid(0),
+        }
+    }
+
+    /// Attempt question with only id + optional submission time set (all other
+    /// fields empty) - enough for the timing/blur/moderation logic.
+    fn q(id: ObjectId, submission_ms: Option<i64>) -> AttemptQuestionSetQuestion {
+        AttemptQuestionSetQuestion {
+            id,
+            text: String::new(),
+            tags: vec![],
+            deprecated: false,
+            audio: None,
+            answers: vec![],
+            selected: vec![],
+            generated: vec![],
+            submission_time: submission_ms.map(bdt),
+        }
+    }
+
+    /// Single-question-set attempt with a chosen start, total time and passing
+    /// percent.
+    fn attempt_with(
+        start_ms: i64,
+        total_time_in_s: i64,
+        passing_percent: f64,
+        questions: Vec<AttemptQuestionSetQuestion>,
+    ) -> Attempt {
+        Attempt {
+            id: oid(250),
+            exam_id: oid(251),
+            user_id: oid(252),
+            prerequisites: vec![],
+            deprecated: false,
+            question_sets: vec![AttemptQuestionSet {
+                id: oid(253),
+                _type: Default::default(),
+                context: None,
+                questions,
+            }],
+            config: ExamEnvironmentConfig {
+                total_time_in_s,
+                passing_percent,
+                ..Default::default()
+            },
+            start_time: bdt(start_ms),
+        }
+    }
+
+    // ---- Median -----------------------------------------------------------
+
+    #[test]
+    fn median_empty_is_none() {
+        let v: Vec<Duration> = vec![];
+        assert_eq!(v.median(), None);
+    }
+
+    #[test]
+    fn median_odd_len_returns_middle_and_sorts() {
+        let v = vec![
+            Duration::from_secs(3),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        ];
+        assert_eq!(v.median(), Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn median_even_len_averages_middle_pair() {
+        let v = vec![Duration::from_secs(2), Duration::from_secs(4)];
+        assert_eq!(v.median(), Some(Duration::from_secs(3)));
+    }
+
+    // ---- get_last_submission_time / get_total_time ------------------------
+
+    #[test]
+    fn last_submission_time_is_max() {
+        let a = attempt_with(
+            0,
+            100,
+            80.0,
+            vec![
+                q(oid(1), Some(5_000)),
+                q(oid(2), Some(9_000)),
+                q(oid(3), None),
+                q(oid(4), Some(7_000)),
+            ],
+        );
+        assert_eq!(get_last_submission_time(&a), bdt(9_000));
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one question")]
+    fn last_submission_time_panics_when_none_answered() {
+        let a = attempt_with(0, 100, 80.0, vec![q(oid(1), None)]);
+        let _ = get_last_submission_time(&a);
+    }
+
+    #[test]
+    fn total_time_is_last_submission_minus_start() {
+        let a = attempt_with(
+            0,
+            100,
+            80.0,
+            vec![q(oid(1), Some(3_000)), q(oid(2), Some(8_000))],
+        );
+        assert_eq!(get_total_time(&a), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn total_time_saturates_to_zero_when_submission_before_start() {
+        let a = attempt_with(10_000, 100, 80.0, vec![q(oid(1), Some(3_000))]);
+        assert_eq!(get_total_time(&a), Duration::ZERO);
+    }
+
+    // ---- get_time_per_question --------------------------------------------
+
+    #[test]
+    fn time_per_question_uses_latest_visit_at_or_before_submission() {
+        let q1 = oid(1);
+        let a = attempt_with(0, 100, 80.0, vec![q(q1, Some(10_000))]);
+        let events = vec![
+            ev(EventKind::QuestionVisit, Some(q1), 2_000),
+            ev(EventKind::QuestionVisit, Some(q1), 8_000),
+            // After submission -> excluded by the `<= submission_time` filter.
+            ev(EventKind::QuestionVisit, Some(q1), 12_000),
+        ];
+        // 10_000 - 8_000 (latest visit at/before submission)
+        assert_eq!(get_time_per_question(&a, &events), vec![Duration::from_secs(2)]);
+    }
+
+    #[test]
+    fn time_per_question_falls_back_to_nearest_earlier_submission_then_start() {
+        let q1 = oid(1);
+        let q2 = oid(2);
+        let a = attempt_with(
+            0,
+            100,
+            80.0,
+            vec![q(q1, Some(5_000)), q(q2, Some(12_000))],
+        );
+        // No visits:
+        //   q1 -> no earlier other submission -> start_time(0)      => 5s
+        //   q2 -> nearest earlier other submission is q1 @5s        => 7s
+        assert_eq!(
+            get_time_per_question(&a, &vec![]),
+            vec![Duration::from_secs(5), Duration::from_secs(7)]
+        );
+    }
+
+    #[test]
+    fn time_per_question_ignores_other_question_visits_and_unanswered() {
+        let q1 = oid(1);
+        let q2 = oid(2);
+        let a = attempt_with(0, 100, 80.0, vec![q(q1, Some(6_000)), q(q2, None)]);
+        // Visit belongs to q2, which is unanswered (omitted); q1 has no own
+        // visit and no earlier other submission -> start_time(0) => 6s.
+        let events = vec![ev(EventKind::QuestionVisit, Some(q2), 3_000)];
+        assert_eq!(get_time_per_question(&a, &events), vec![Duration::from_secs(6)]);
+    }
+
+    // ---- get_blur_periods -------------------------------------------------
+
+    #[test]
+    fn blur_periods_pairs_blur_with_next_focus() {
+        let q1 = oid(1);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Focus, Some(q1), 3_000),
+        ];
+        let bps = get_blur_periods(&events);
+        assert_eq!(bps.len(), 1);
+        assert_eq!(bps[0].question_id, q1);
+        assert_eq!(bps[0].periods.len(), 1);
+        assert_eq!(bps[0].periods[0].start.timestamp_millis(), T0 + 1_000);
+        assert_eq!(bps[0].periods[0].end.timestamp_millis(), T0 + 3_000);
+    }
+
+    #[test]
+    fn blur_periods_second_blur_before_focus_keeps_first_start_and_question() {
+        let q1 = oid(1);
+        let q2 = oid(2);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            // Second blur before a focus is window-level, not per-question: it is
+            // folded into the still-open period, keeping the first start + question.
+            ev(EventKind::Blur, Some(q2), 1_500),
+            ev(EventKind::Focus, Some(q2), 3_000),
+        ];
+        let bps = get_blur_periods(&events);
+        assert_eq!(bps.len(), 1);
+        assert_eq!(bps[0].question_id, q1);
+        assert_eq!(bps[0].periods.len(), 1);
+        assert_eq!(bps[0].periods[0].start.timestamp_millis(), T0 + 1_000);
+        assert_eq!(bps[0].periods[0].end.timestamp_millis(), T0 + 3_000);
+    }
+
+    #[test]
+    fn blur_periods_ignores_unpaired_focus_and_trailing_blur() {
+        let q1 = oid(1);
+        let events = vec![
+            ev(EventKind::Focus, Some(q1), 1_000), // no pending blur -> ignored
+            ev(EventKind::Blur, Some(q1), 2_000),  // never closed -> dropped
+        ];
+        assert!(get_blur_periods(&events).is_empty());
+    }
+
+    #[test]
+    fn blur_periods_aggregates_same_question_and_skips_irrelevant_events() {
+        let q1 = oid(1);
+        let events = vec![
+            ev(EventKind::QuestionVisit, Some(q1), 500), // not blur/focus -> skipped
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Focus, Some(q1), 2_000),
+            ev(EventKind::Blur, None, 2_500), // no question meta -> skipped
+            ev(EventKind::Blur, Some(q1), 3_000),
+            ev(EventKind::Focus, Some(q1), 4_000),
+        ];
+        let bps = get_blur_periods(&events);
+        assert_eq!(bps.len(), 1);
+        assert_eq!(bps[0].periods.len(), 2);
+    }
+
+    // ---- get_total_blur_time ----------------------------------------------
+
+    #[test]
+    fn total_blur_time_sorts_and_sums_focus_minus_blur() {
+        let q1 = oid(1);
+        // Deliberately unsorted: the function sorts internally.
+        let events = vec![
+            ev(EventKind::Focus, Some(q1), 3_000),
+            ev(EventKind::Blur, Some(q1), 1_000),
+        ];
+        assert_eq!(get_total_blur_time(&events), 2.0);
+    }
+
+    #[test]
+    fn total_blur_time_double_blur_uses_first_start_and_drops_trailing() {
+        let q1 = oid(1);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Blur, Some(q1), 1_500), // ignored while a blur is pending
+            ev(EventKind::Focus, Some(q1), 3_000),
+            ev(EventKind::Blur, Some(q1), 5_000), // trailing, no focus -> dropped
+        ];
+        assert_eq!(get_total_blur_time(&events), 2.0);
+    }
+
+    #[test]
+    fn total_blur_time_sums_multiple_periods() {
+        let q1 = oid(1);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Focus, Some(q1), 2_000),
+            ev(EventKind::Blur, Some(q1), 5_000),
+            ev(EventKind::Focus, Some(q1), 5_500),
+        ];
+        assert_eq!(get_total_blur_time(&events), 1.5);
+    }
+
+    // ---- get_total_blur_time_before_last_answer ---------------------------
+
+    #[test]
+    fn total_blur_time_before_last_answer_excludes_after_last_submission() {
+        let q1 = oid(1);
+        let a = attempt_with(0, 1000, 80.0, vec![q(q1, Some(10_000))]);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Focus, Some(q1), 2_000), // end 2s  < 10s -> counted
+            ev(EventKind::Blur, Some(q1), 11_000),
+            ev(EventKind::Focus, Some(q1), 12_000), // end 12s !< 10s -> excluded
+        ];
+        assert_eq!(get_total_blur_time_before_last_answer(&a, &events), 1.0);
+    }
+
+    #[test]
+    fn total_blur_time_before_last_answer_excludes_focus_at_exactly_last_submission() {
+        let q1 = oid(1);
+        let a = attempt_with(0, 1000, 80.0, vec![q(q1, Some(10_000))]);
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 9_000),
+            // end == last submission; comparison is strict `<` -> excluded.
+            ev(EventKind::Focus, Some(q1), 10_000),
+        ];
+        assert_eq!(get_total_blur_time_before_last_answer(&a, &events), 0.0);
+    }
+
+    // ---- get_moderation_score (per-component isolation) -------------------
+
+    #[test]
+    fn moderation_score_zero_when_nothing_answered() {
+        let a = attempt_with(0, 100, 80.0, vec![q(oid(1), None), q(oid(2), None)]);
+        assert_eq!(get_moderation_score(&a, &vec![]).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn moderation_score_errors_when_time_taken_exceeds_total_time() {
+        // total_time = 10s, but last submission is at 20s.
+        let a = attempt_with(0, 10, 80.0, vec![q(oid(1), Some(20_000))]);
+        let err = get_moderation_score(&a, &vec![]).unwrap_err();
+        assert!(matches!(err, Error::ModerationScore(_)));
+    }
+
+    #[test]
+    fn moderation_score_clean_attempt_is_zero() {
+        // 4 questions 6s apart; generous total time; no blur.
+        //   fast-completion: 24/100 = 0.24  (>= 0.1) -> 0
+        //   median per question (fallback) = 6s (>= 5) -> 0
+        //   blur -> 0
+        let a = attempt_with(
+            0,
+            100,
+            80.0,
+            vec![
+                q(oid(1), Some(6_000)),
+                q(oid(2), Some(12_000)),
+                q(oid(3), Some(18_000)),
+                q(oid(4), Some(24_000)),
+            ],
+        );
+        assert_eq!(get_moderation_score(&a, &vec![]).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn moderation_score_fast_completion_adds_expected() {
+        // Huge total time -> percent << 0.1 (fast-completion fires), while
+        // per-question times stay >= 5s so the median component contributes 0.
+        let a = attempt_with(
+            0,
+            1000,
+            80.0,
+            vec![q(oid(1), Some(5_000)), q(oid(2), Some(10_000))],
+        );
+        // percent = 10/1000 = 0.01 -> |0.01 - 0.1|/0.1 * 0.25 = 0.9 * 0.25 = 0.225
+        let score = get_moderation_score(&a, &vec![]).unwrap();
+        assert!((score - 0.225).abs() < 1e-9, "score={score}");
+    }
+
+    #[test]
+    fn moderation_score_low_median_time_adds_expected() {
+        // Small total time keeps percent >= 0.1 (no fast-completion score); tiny
+        // per-question times drive the median component alone.
+        let a = attempt_with(
+            0,
+            10,
+            80.0,
+            vec![
+                q(oid(1), Some(1_000)),
+                q(oid(2), Some(2_000)),
+                q(oid(3), Some(3_000)),
+            ],
+        );
+        // percent = 3/10 = 0.3 (no fast score); per-question times all 1s;
+        // median score = |1 - 5|/5 * 0.25 = 0.8 * 0.25 = 0.2
+        let score = get_moderation_score(&a, &vec![]).unwrap();
+        assert!((score - 0.2).abs() < 1e-9, "score={score}");
+    }
+
+    #[test]
+    fn moderation_score_blur_before_last_answer_adds_expected() {
+        let q1 = oid(1);
+        // 10 questions 6s apart -> last submission 60s.
+        let questions = (1..=10u8)
+            .map(|i| q(oid(i), Some(i as i64 * 6_000)))
+            .collect::<Vec<_>>();
+        let a = attempt_with(0, 500, 80.0, questions);
+        // percent = 60/500 = 0.12 (no fast score); median = 6s (no median score).
+        // One question blurred before last submission.
+        let events = vec![
+            ev(EventKind::Blur, Some(q1), 1_000),
+            ev(EventKind::Focus, Some(q1), 2_000),
+        ];
+        // blurred_percent = 1/10 = 0.1; passing_percent = 80
+        // weight = min(0.1*100/(100-80), 1) * 0.25 = min(0.5, 1) * 0.25 = 0.125
+        let score = get_moderation_score(&a, &events).unwrap();
+        assert!((score - 0.125).abs() < 1e-9, "score={score}");
+    }
+
+    // ---- construct_attempt ------------------------------------------------
+
+    fn answer(id: ObjectId, is_correct: bool) -> ExamEnvironmentAnswer {
+        ExamEnvironmentAnswer {
+            id,
+            is_correct,
+            text: String::new(),
+        }
+    }
+
+    #[test]
+    fn construct_attempt_merges_selected_generated_and_submission() {
+        let (qs1, q1, q2) = (oid(10), oid(11), oid(12));
+        let (a1, a2, a3, a4) = (oid(13), oid(14), oid(15), oid(16));
+        let (exam_id, user_id, attempt_id, gen_id, prereq) =
+            (oid(20), oid(21), oid(22), oid(23), oid(24));
+
+        let exam = ExamEnvironmentExam {
+            question_sets: vec![ExamEnvironmentQuestionSet {
+                id: qs1,
+                _type: Default::default(),
+                context: Some(String::from("ctx")),
+                questions: vec![
+                    ExamEnvironmentMultipleChoiceQuestion {
+                        id: q1,
+                        text: String::from("q1"),
+                        tags: vec![String::from("tag")],
+                        audio: None,
+                        answers: vec![answer(a1, true), answer(a2, false)],
+                        deprecated: false,
+                    },
+                    ExamEnvironmentMultipleChoiceQuestion {
+                        id: q2,
+                        text: String::from("q2"),
+                        tags: vec![],
+                        audio: None,
+                        answers: vec![answer(a3, true), answer(a4, false)],
+                        deprecated: false,
+                    },
+                ],
+            }],
+            prerequisites: vec![prereq],
+            deprecated: true,
+            ..Default::default()
+        };
+
+        // `ExamEnvironmentGeneratedExam` has no Default impl; build it from the
+        // extended-JSON shape the fixtures use.
+        let generation: ExamEnvironmentGeneratedExam = serde_json::from_value(serde_json::json!({
+            "_id": { "$oid": gen_id.to_hex() },
+            "examId": { "$oid": exam_id.to_hex() },
+            "questionSets": [{
+                "id": { "$oid": qs1.to_hex() },
+                "questions": [
+                    { "id": { "$oid": q1.to_hex() }, "answers": [ { "$oid": a1.to_hex() }, { "$oid": a2.to_hex() } ] },
+                    { "id": { "$oid": q2.to_hex() }, "answers": [ { "$oid": a3.to_hex() } ] },
+                ]
+            }],
+            "deprecated": false,
+            "version": 1,
+        }))
+        .unwrap();
+
+        // Attempt answers only q1.
+        let exam_attempt = ExamEnvironmentExamAttempt {
+            id: attempt_id,
+            exam_id,
+            user_id,
+            generated_exam_id: gen_id,
+            start_time: bdt(1_000),
+            question_sets: vec![ExamEnvironmentQuestionSetAttempt {
+                id: qs1,
+                questions: vec![ExamEnvironmentMultipleChoiceQuestionAttempt {
+                    id: q1,
+                    answers: vec![a1],
+                    submission_time: bdt(5_000),
+                }],
+            }],
+            ..Default::default()
+        };
+
+        let attempt = construct_attempt(&exam, &generation, &exam_attempt);
+
+        // Top-level fields sourced from the right inputs.
+        assert_eq!(attempt.id, attempt_id);
+        assert_eq!(attempt.exam_id, exam_id);
+        assert_eq!(attempt.user_id, user_id);
+        assert_eq!(attempt.prerequisites, vec![prereq]);
+        assert!(attempt.deprecated);
+        assert_eq!(attempt.start_time, bdt(1_000));
+
+        assert_eq!(attempt.question_sets.len(), 1);
+        let out_qs = &attempt.question_sets[0];
+        assert_eq!(out_qs.id, qs1);
+        assert_eq!(out_qs.context.as_deref(), Some("ctx"));
+        assert_eq!(out_qs.questions.len(), 2);
+
+        // q1: answered -> selected from attempt, generated from generation,
+        // submission set, and all exam answers retained.
+        let oq1 = &out_qs.questions[0];
+        assert_eq!(oq1.id, q1);
+        assert_eq!(oq1.selected, vec![a1]);
+        assert_eq!(oq1.generated, vec![a1, a2]);
+        assert_eq!(oq1.submission_time, Some(bdt(5_000)));
+        assert_eq!(oq1.answers.len(), 2);
+
+        // q2: unanswered -> no selected, no submission; generated still filled
+        // from the generation.
+        let oq2 = &out_qs.questions[1];
+        assert_eq!(oq2.id, q2);
+        assert!(oq2.selected.is_empty());
+        assert_eq!(oq2.generated, vec![a3]);
+        assert_eq!(oq2.submission_time, None);
+    }
+
+    #[test]
+    fn construct_attempt_question_set_absent_from_generation_and_attempt_is_empty() {
+        let (qs2, q3, a5) = (oid(30), oid(31), oid(32));
+        let (exam_id, gen_id) = (oid(40), oid(41));
+
+        // Exam has a question set that neither the generation nor the attempt
+        // references.
+        let exam = ExamEnvironmentExam {
+            question_sets: vec![ExamEnvironmentQuestionSet {
+                id: qs2,
+                _type: Default::default(),
+                context: None,
+                questions: vec![ExamEnvironmentMultipleChoiceQuestion {
+                    id: q3,
+                    text: String::from("q3"),
+                    tags: vec![],
+                    audio: None,
+                    answers: vec![answer(a5, true)],
+                    deprecated: false,
+                }],
+            }],
+            ..Default::default()
+        };
+
+        let generation: ExamEnvironmentGeneratedExam = serde_json::from_value(serde_json::json!({
+            "_id": { "$oid": gen_id.to_hex() },
+            "examId": { "$oid": exam_id.to_hex() },
+            "questionSets": [],
+            "deprecated": false,
+            "version": 1,
+        }))
+        .unwrap();
+
+        let exam_attempt = ExamEnvironmentExamAttempt {
+            exam_id,
+            generated_exam_id: gen_id,
+            question_sets: vec![],
+            ..Default::default()
+        };
+
+        let attempt = construct_attempt(&exam, &generation, &exam_attempt);
+
+        assert_eq!(attempt.question_sets.len(), 1);
+        let oq = &attempt.question_sets[0].questions[0];
+        assert_eq!(oq.id, q3);
+        assert!(oq.selected.is_empty());
+        assert!(oq.generated.is_empty());
+        assert_eq!(oq.submission_time, None);
+        // Exam answers are still carried over verbatim.
+        assert_eq!(oq.answers.len(), 1);
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "clean_pass",
+  "description": "4 questions 6s apart, generous time, no blur. v2 scores 0; v1 still penalises the fast overall completion via its linear time term.",
+  "totalTimeInS": 100,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 6000 },
+    { "submissionMs": 12000 },
+    { "submissionMs": 18000 },
+    { "submissionMs": 24000 }
+  ],
+  "events": []
+}

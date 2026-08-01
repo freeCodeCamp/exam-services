@@ -1,0 +1,11 @@
+{
+  "name": "time_exceeds_total",
+  "description": "Last submission (20s) falls after the allotted total time (10s). Both versions must return Err(ModerationScore ...). Exercises the error path in the matrix.",
+  "totalTimeInS": 10,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 20000 }
+  ],
+  "events": []
+}

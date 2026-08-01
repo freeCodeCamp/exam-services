@@ -1,0 +1,12 @@
+{
+  "name": "fast_completion",
+  "description": "Finished in 1% of the allotted time; median per-question stays >=5s so only the fast-completion term fires. v2 = 0.225.",
+  "totalTimeInS": 1000,
+  "passingPercent": 80,
+  "startTimeMs": 0,
+  "questions": [
+    { "submissionMs": 5000 },
+    { "submissionMs": 10000 }
+  ],
+  "events": []
+}

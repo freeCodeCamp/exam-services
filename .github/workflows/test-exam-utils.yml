@@ -18,13 +18,13 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.1
 
       # Runs the synthetic unit tests, the moderation-score golden gate
       # (fails on any un-regenerated drift in a live version, or an accidental
@@ -36,7 +36,7 @@ jobs:
       # gate fails, to see exactly which scenarios moved.
       - name: Upload moderation report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: moderation-report
           path: exam-utils/testdata/moderation/report.html

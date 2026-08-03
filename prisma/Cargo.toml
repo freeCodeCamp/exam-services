@@ -1,13 +1,13 @@
 [package]
 name = "prisma"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 
 [dependencies]
 bson = { version = "3.1.0", features = ["serde"] }
-mongodb = { version = "3.3.0", features = ["bson-3"], optional = true }
+mongodb = { version = "3.8.0", features = ["bson-3"], optional = true }
 chrono = { version = "0.4.43", features = ["serde"] }
-prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "2.1.0", features = [
+prisma-rust-schema = { git = "https://github.com/ShaunSHamilton/prisma-rust-schema.git", version = "2.1.1", features = [
   "bson",
   "mongodb",
 ] }

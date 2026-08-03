@@ -1,5 +1,12 @@
 # Exam Services - Moderation Service Changelog
 
+## [3.3.0]
+
+- run new `exam-utils` moderation score algorithm alongside legacy (`v1_pre_bc6af64`) for comparison
+- store new-algorithm result in `moderation_score`; legacy score still gates the auto-approval decision
+- emit `exam_service.moderation_score_duration` Sentry metric per algorithm version
+- bump `sentry` to `0.49.0`, `tokio` to `1.53.1`
+
 ## [3.2.0]
 
 - bump `sentry` to `0.48.5`, enable `metrics` feature

@@ -1,5 +1,13 @@
 # Exam Services - Exam Utils Changelog
 
+## [3.1.0]
+
+- rewrite `get_moderation_score`: time-taken and median-time-per-question weighting, blur periods tracked per-question instead of as running totals
+- add public helpers backing the new algorithm: `get_time_per_question`, `get_total_time`, `get_blur_periods`, `get_total_blur_time`, `get_total_blur_time_before_last_answer`, `get_last_submission_time`, and `QuestionBlurPeriods`/`Period` types
+- add `moderation_versions` module exposing prior algorithm versions (e.g. `v1_pre_bc6af64`) for side-by-side comparison
+- add `moderation_harness` test harness: runs each `moderation_versions` entry over a committed scenario catalog and gates scores against a golden file
+- enable `bson` `chrono-0_4` feature
+
 ## [3.0.0]
 
 - fix `generate_exam` producing generations with duplicate question set / question ids:

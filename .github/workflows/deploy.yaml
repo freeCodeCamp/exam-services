@@ -22,7 +22,7 @@ jobs:
         run: |
           TAGNAME="$(git rev-parse --short HEAD)-$(date +%Y%m%d)-$(date +%H%M)"
           echo "tagname=$TAGNAME" >> $GITHUB_ENV
-          echo "::set-output name=tag::$TAGNAME"
+          echo "{tag}={$TAGNAME}" >> $GITHUB_OUTPUT
 
       - name: Install doctl
         uses: digitalocean/action-doctl@v2.5.2

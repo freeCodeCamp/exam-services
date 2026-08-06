@@ -1,5 +1,9 @@
 # Exam Services - Moderation Service Changelog
 
+## [3.3.1]
+
+- remove `challenges_awarded = true` from moderation score calculation
+
 ## [3.3.0]
 
 - run new `exam-utils` moderation score algorithm alongside legacy (`v1_pre_bc6af64`) for comparison

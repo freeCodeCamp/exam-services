@@ -1,9 +1,5 @@
 use prisma::db::client;
-use tracing::error;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-
-mod award_challenges_from_date;
-use award_challenges_from_date::award_challenges_from_date;
 
 #[tokio::main]
 async fn main() {
@@ -19,7 +15,7 @@ async fn main() {
     dotenvy::dotenv().ok();
     let mongo_uri = std::env::var("MONGODB_URI").unwrap();
     let client = client(&mongo_uri).await.unwrap();
-    if let Err(e) = award_challenges_from_date(client).await {
-        error!("{e:?}");
-    }
+    // if let Err(e) = unset_challenges_awarded(client).await {
+    //     error!("{e:?}");
+    // }
 }

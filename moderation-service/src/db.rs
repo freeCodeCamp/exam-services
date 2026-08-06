@@ -160,37 +160,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 .attribute("version", "v1_pre_bc6af64")
                 .capture();
 
-                match v1_result {
-                    Ok(moderation_score) => {
-                        sentry::metrics::distribution(
-                            "exam_service.moderation_score",
-                            moderation_score,
-                        )
-                        .capture();
-
-                        if moderation_score < env_vars.moderation_threshold {
-                            num_attempts_below_moderation_threshold += 1;
-                            exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
-                            // Set to true to avoid another check for whether the attempt passed or not.
-                            exam_moderation.challenges_awarded = true;
-                            exam_moderation.moderation_date = Some(now);
-                            exam_moderation.feedback = Some(format!("Auto Approved"));
-                        } else {
-                            num_attempts_above_moderation_threshold += 1;
-                            exam_moderation.feedback =
-                                Some(format!("Moderation score: {moderation_score}"));
-                        }
-                    }
-                    Err(e) => {
-                        num_score_errors += 1;
-                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate legacy moderation score");
-                        exam_moderation.feedback =
-                            Some(format!("Moderation score calculation error."));
-                    }
-                };
-
                 // Newest algorithm. Just shown in Exam Creator UI - not used to determine placement
-                // TODO: Consider using Sentry metrics to track change in moderation score
                 let start = std::time::Instant::now();
                 let current_result = get_moderation_score(&attempt, &events);
                 sentry::metrics::distribution(
@@ -201,14 +171,46 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 .attribute("version", "current")
                 .capture();
 
-                match current_result {
+                match v1_result {
                     Ok(moderation_score) => {
-                        exam_moderation.moderation_score = Some(moderation_score);
+                        sentry::metrics::distribution(
+                            "exam_service.moderation_score",
+                            moderation_score,
+                        )
+                        .attribute("version", "v1_pre_bc6af64")
+                        .capture();
                     }
                     Err(e) => {
-                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
+                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate legacy moderation score");
                     }
                 }
+
+                match current_result {
+                    Ok(moderation_score) => {
+                        sentry::metrics::distribution(
+                            "exam_service.moderation_score",
+                            moderation_score,
+                        )
+                        .attribute("version", "current")
+                        .capture();
+
+                        exam_moderation.moderation_score = Some(moderation_score);
+                        if moderation_score < env_vars.moderation_threshold {
+                            num_attempts_below_moderation_threshold += 1;
+                            exam_moderation.status = ExamEnvironmentExamModerationStatus::Approved;
+                            exam_moderation.moderation_date = Some(now);
+                            exam_moderation.feedback = Some(format!("Auto Approved"));
+                        } else {
+                            num_attempts_above_moderation_threshold += 1;
+                        }
+                    }
+                    Err(e) => {
+                        num_score_errors += 1;
+                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
+                        exam_moderation.feedback =
+                            Some(format!("Moderation score calculation error."));
+                    }
+                };
             }
 
             // Create a moderation entry

@@ -33,7 +33,7 @@ use serde::Deserialize;
 use crate::attempt::{
     Attempt, AttemptQuestionSet, AttemptQuestionSetQuestion, construct_attempt,
 };
-use crate::moderation_versions::VERSIONS;
+use crate::moderation_versions::{LIVE, VERSIONS};
 
 /// Fixed epoch offset - keeps timestamps clear of the Unix epoch so nothing
 /// saturates against it. Matches `attempt::logic`'s `T0`.
@@ -182,7 +182,7 @@ struct Case {
 fn score_all(attempt: &Attempt, events: &Vec<Event>) -> Vec<Result<f64, String>> {
     VERSIONS
         .iter()
-        .map(|(_, f)| f(attempt, events).map_err(|e| e.to_string()))
+        .map(|v| (v.score)(attempt, events).map_err(|e| e.to_string()))
         .collect()
 }
 
@@ -265,15 +265,25 @@ fn real_cases() -> Vec<Case> {
             cells: score_all(&constructed, &events),
         });
     }
-    // Most-flagged first (by newest version); error rows sink to the bottom.
-    let key = |c: &Case| newest_score(c).unwrap_or(f64::NEG_INFINITY);
+    // Most-flagged first (by live version); error rows sink to the bottom.
+    let key = |c: &Case| live_score(c).unwrap_or(f64::NEG_INFINITY);
     cases.sort_by(|a, b| key(b).partial_cmp(&key(a)).unwrap());
     cases
 }
 
-/// Score under the newest (last) registered version, if it did not error.
-fn newest_score(c: &Case) -> Option<f64> {
-    c.cells.last().and_then(|r| r.as_ref().ok().copied())
+/// Column index of the live version within a [`Case`]'s cells.
+fn live_index() -> usize {
+    VERSIONS
+        .iter()
+        .position(|v| v.id == LIVE)
+        .expect("LIVE id must be registered in VERSIONS")
+}
+
+/// Score under the live version, if it did not error.
+fn live_score(c: &Case) -> Option<f64> {
+    c.cells
+        .get(live_index())
+        .and_then(|r| r.as_ref().ok().copied())
 }
 
 /// Score under the oldest (first) registered version, if it did not error.
@@ -281,9 +291,9 @@ fn oldest_score(c: &Case) -> Option<f64> {
     c.cells.first().and_then(|r| r.as_ref().ok().copied())
 }
 
-/// Threshold-band change between oldest and newest version.
+/// Threshold-band change between the oldest and the live version.
 fn crossing(c: &Case) -> Option<&'static str> {
-    match (oldest_score(c), newest_score(c)) {
+    match (oldest_score(c), live_score(c)) {
         (Some(o), Some(n)) => match (o >= THRESHOLD, n >= THRESHOLD) {
             (false, true) => Some("NOW-FLAGGED"),
             (true, false) => Some("NOW-CLEARED"),
@@ -310,8 +320,13 @@ fn golden_text(cases: &[Case]) -> String {
     );
     s.push_str("# Format: <scenario> | <version> | <score|ERR:msg>\n");
     for case in cases {
-        for ((label, _), cell) in VERSIONS.iter().zip(&case.cells) {
-            s.push_str(&format!("{} | {} | {}\n", case.name, label, cell_text(cell)));
+        for (version, cell) in VERSIONS.iter().zip(&case.cells) {
+            s.push_str(&format!(
+                "{} | {} | {}\n",
+                case.name,
+                version.label,
+                cell_text(cell)
+            ));
         }
     }
     s
@@ -413,8 +428,8 @@ fn render_row(case: &Case, with_desc: bool) -> String {
             )),
         }
     }
-    // Delta (newest - oldest) + crossing.
-    let (delta_cell, cross_cell) = match (oldest_score(case), newest_score(case)) {
+    // Delta (live - oldest) + crossing.
+    let (delta_cell, cross_cell) = match (oldest_score(case), live_score(case)) {
         (Some(o), Some(n)) => {
             let d = n - o;
             let badge = match crossing(case) {
@@ -441,10 +456,17 @@ fn render_table(id: &str, cases: &[Case], with_desc: bool) -> String {
     if with_desc {
         ths.push_str("<th data-type=\"text\">description</th>");
     }
-    for (label, _) in VERSIONS {
-        ths.push_str(&format!("<th data-type=\"num\">{}</th>", esc(label)));
+    for version in VERSIONS {
+        let live = if version.id == LIVE { " (live)" } else { "" };
+        ths.push_str(&format!(
+            "<th data-type=\"num\">{}{live}</th>",
+            esc(version.label)
+        ));
     }
-    ths.push_str("<th data-type=\"num\">&Delta; (new&minus;old)</th><th data-type=\"text\">crossing</th>");
+    ths.push_str(&format!(
+        "<th data-type=\"num\">&Delta; (live&minus;{})</th><th data-type=\"text\">crossing</th>",
+        esc(VERSIONS[0].label)
+    ));
 
     let rows: String = cases.iter().map(|c| render_row(c, with_desc)).collect();
     format!(
@@ -453,11 +475,11 @@ fn render_table(id: &str, cases: &[Case], with_desc: bool) -> String {
 }
 
 /// Per-version summary: how many non-error cases each version flags, plus the
-/// spread of newest-vs-oldest deltas and threshold crossings.
+/// spread of live-vs-oldest deltas and threshold crossings.
 fn render_summary(cases: &[Case]) -> String {
     let mut cards = String::new();
 
-    for (i, (label, _)) in VERSIONS.iter().enumerate() {
+    for (i, version) in VERSIONS.iter().enumerate() {
         let scores: Vec<f64> = cases
             .iter()
             .filter_map(|c| c.cells.get(i).and_then(|r| r.as_ref().ok().copied()))
@@ -469,22 +491,24 @@ fn render_summary(cases: &[Case]) -> String {
         } else {
             scores.iter().sum::<f64>() / scores.len() as f64
         };
+        let state = if version.id == LIVE { "live" } else { "frozen" };
         cards.push_str(&format!(
-            "<div class=\"card\"><h3>{}</h3>\
+            "<div class=\"card\"><h3>{} <span class=\"muted\">{state} &middot; {}</span></h3>\
                <div class=\"stat\"><b>{flagged}</b><span>flagged (&ge;{THRESHOLD})</span></div>\
                <div class=\"stat\"><b>{:.3}</b><span>mean score</span></div>\
                <div class=\"stat\"><b>{errors}</b><span>errors</span></div></div>",
-            esc(label),
+            esc(version.label),
+            esc(version.introduced_in),
             mean
         ));
     }
 
-    // Crossings between oldest and newest.
+    // Crossings between the oldest and the live version.
     let now_flagged = cases.iter().filter(|c| crossing(c) == Some("NOW-FLAGGED")).count();
     let now_cleared = cases.iter().filter(|c| crossing(c) == Some("NOW-CLEARED")).count();
     let deltas: Vec<f64> = cases
         .iter()
-        .filter_map(|c| match (oldest_score(c), newest_score(c)) {
+        .filter_map(|c| match (oldest_score(c), live_score(c)) {
             (Some(o), Some(n)) => Some(n - o),
             _ => None,
         })
@@ -498,7 +522,7 @@ fn render_summary(cases: &[Case]) -> String {
         (mean, max, min)
     };
     cards.push_str(&format!(
-        "<div class=\"card wide\"><h3>newest vs oldest</h3>\
+        "<div class=\"card wide\"><h3>live vs oldest</h3>\
            <div class=\"stat\"><b>{now_flagged}</b><span>now flagged</span></div>\
            <div class=\"stat\"><b>{now_cleared}</b><span>now cleared</span></div>\
            <div class=\"stat\"><b>{dmean:+.3}</b><span>&Delta; mean</span></div>\
@@ -511,7 +535,13 @@ fn render_summary(cases: &[Case]) -> String {
 fn render_html(synthetic: &[Case], real: &[Case]) -> String {
     let versions_line = VERSIONS
         .iter()
-        .map(|(l, _)| *l)
+        .map(|v| {
+            if v.id == LIVE {
+                format!("{} (live)", v.label)
+            } else {
+                v.label.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join(" &middot; ");
 
@@ -581,7 +611,7 @@ fn render_html(synthetic: &[Case], real: &[Case]) -> String {
 <body>
   <h1>Moderation-score version comparison</h1>
   <p class="sub">Versions: {versions_line} &nbsp;&middot;&nbsp; threshold {THRESHOLD} &nbsp;&middot;&nbsp; click any header to sort.<br>
-  Bars are score magnitude; tinted red at/above threshold. &Delta; and crossings compare the newest version to the oldest.</p>
+  Bars are score magnitude; tinted red at/above threshold. &Delta; and crossings compare the live version to the oldest.</p>
 
   <h2>Synthetic scenarios <span class="muted">(committed, CI-gated)</span></h2>
   {summary}

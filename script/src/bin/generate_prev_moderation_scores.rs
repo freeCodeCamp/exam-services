@@ -1,24 +1,23 @@
-//! Generate `prevModerationScore` fixtures from the *previous* moderation-score
-//! algorithm, so the `exam-utils` `moderation_score_diff` test can measure how the
-//! current algorithm diverges from it.
+//! Generate `prevModerationScore` fixtures from moderation-score algorithm `v1`,
+//! so the `exam-utils` `moderation_score_diff` test can measure how the live
+//! algorithm diverges from it.
 //!
 //! Unlike `dump_moderation_fixtures` (which pulls prod scores out of Mongo/Supabase),
 //! this needs no DB: it reads the production data already sitting in `fixtures/`
 //! (attempt / exam / generation / events) and recomputes each attempt's score with
-//! the OLD algorithm (as of `bc6af64^`, before `bc6af64 "fix: update deps and
-//! schema"` changed it) alongside the current one.
+//! `v1` alongside the live version.
 //!
-//! The previous algorithm now lives, frozen, in
-//! `exam_utils::moderation_versions::v1_pre_bc6af64` (single source of truth,
-//! also used by the `exam-utils` comparison harness). Output:
+//! Both algorithms come from the `exam_utils::moderation_versions` registry
+//! (single source of truth, also used by the `exam-utils` comparison harness);
+//! each written score records the stable version label that produced it. Output:
 //! `fixtures/moderation/<attemptId>`.
 //!
 //! Run: `cargo run --bin generate_prev_moderation_scores` (in `../script`)
 
 use std::path::{Path, PathBuf};
 
-use exam_utils::attempt::{construct_attempt, get_moderation_score};
-use exam_utils::moderation_versions::v1_pre_bc6af64;
+use exam_utils::attempt::construct_attempt;
+use exam_utils::moderation_versions::{self, by_id};
 use mongodb::bson::oid::ObjectId;
 use prisma::{
     ExamEnvironmentExam, ExamEnvironmentExamAttempt, ExamEnvironmentGeneratedExam,
@@ -29,7 +28,13 @@ use serde_json::json;
 /// Workspace-root `fixtures/` dir (resolved from crate manifest, CWD-independent).
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures");
 
+/// Baseline version the `prevModerationScore` column is generated from.
+const PREV: u32 = 1;
+
 fn main() -> anyhow::Result<()> {
+    let prev = by_id(PREV).expect("baseline version must be registered");
+    let live = moderation_versions::live();
+
     let moderation_dir = Path::new(FIXTURES).join("moderation");
     std::fs::create_dir_all(&moderation_dir)?;
 
@@ -64,23 +69,23 @@ fn main() -> anyhow::Result<()> {
 
         let constructed = construct_attempt(&exam, &generation, &attempt);
 
-        match v1_pre_bc6af64(&constructed, &events) {
+        match (prev.score)(&constructed, &events) {
             Ok(prev_moderation_score) => {
-                // Current algorithm score (live `exam-utils` `get_moderation_score`).
-                let moderation_score = match get_moderation_score(&constructed, &events) {
+                let moderation_score = match (live.score)(&constructed, &events) {
                     Ok(s) => Some(s),
                     Err(e) => {
-                        eprintln!("current-score skip {}: {e}", attempt.id.to_hex());
+                        eprintln!("{}-score skip {}: {e}", live.label, attempt.id.to_hex());
                         None
                     }
                 };
                 let record = json!({
                     "examAttemptId": attempt.id.to_hex(),
                     "prevModerationScore": prev_moderation_score,
-                    // Provenance so the value is not mistaken for a prod score.
-                    "prevModerationScoreSource": "get_moderation_score@bc6af64^",
+                    // Stable version label, so the value is neither mistaken for a
+                    // prod score nor for the output of a later algorithm.
+                    "prevModerationScoreVersion": prev.label,
                     "moderationScore": moderation_score,
-                    "moderationScoreSource": "get_moderation_score@HEAD",
+                    "moderationScoreVersion": live.label,
                 });
                 std::fs::write(
                     fixture_path("moderation", &attempt.id),

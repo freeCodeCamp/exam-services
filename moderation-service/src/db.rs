@@ -8,11 +8,7 @@ use mongodb::{
 };
 use serde::{Deserialize, Serialize};
 
-use exam_utils::{
-    attempt::{construct_attempt, get_moderation_score},
-    misc::check_attempt_pass,
-    moderation_versions::v1_pre_bc6af64,
-};
+use exam_utils::{attempt::construct_attempt, misc::check_attempt_pass, moderation_versions};
 use prisma::{
     ExamEnvironmentChallenge, ExamEnvironmentExam, ExamEnvironmentExamAttempt,
     ExamEnvironmentExamModeration, ExamEnvironmentExamModerationStatus,
@@ -149,51 +145,42 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
 
-                // TEMP: Using old `moderation_score` algorithm alongside new
-                let start = std::time::Instant::now();
-                let v1_result = v1_pre_bc6af64(&attempt, &events);
-                sentry::metrics::distribution(
-                    "exam_service.moderation_score_duration",
-                    start.elapsed().as_secs_f64() * 1000.0,
-                )
-                .unit(sentry::protocol::Unit::Millisecond)
-                .attribute("version", "v1_pre_bc6af64")
-                .capture();
+                // Score under every registered algorithm version for comparison in Sentry. Only LIVE version score is persisted and drives placement.
+                let mut scores = HashMap::new();
+                for version in moderation_versions::VERSIONS {
+                    let start = std::time::Instant::now();
+                    let result = (version.score)(&attempt, &events);
+                    sentry::metrics::distribution(
+                        "exam_service.moderation_score_duration",
+                        start.elapsed().as_secs_f64() * 1000.0,
+                    )
+                    .unit(sentry::protocol::Unit::Millisecond)
+                    .attribute("version", version.label)
+                    .capture();
 
-                // Newest algorithm. Just shown in Exam Creator UI - not used to determine placement
-                let start = std::time::Instant::now();
-                let current_result = get_moderation_score(&attempt, &events);
-                sentry::metrics::distribution(
-                    "exam_service.moderation_score_duration",
-                    start.elapsed().as_secs_f64() * 1000.0,
-                )
-                .unit(sentry::protocol::Unit::Millisecond)
-                .attribute("version", "current")
-                .capture();
+                    match &result {
+                        Ok(moderation_score) => {
+                            sentry::metrics::distribution(
+                                "exam_service.moderation_score",
+                                *moderation_score,
+                            )
+                            .attribute("version", version.label)
+                            .capture();
+                        }
+                        Err(e) => {
+                            tracing::error!(attempt = %attempt.id, version = version.label, error = %e, "unable to calculate moderation score");
+                        }
+                    }
 
-                match v1_result {
-                    Ok(moderation_score) => {
-                        sentry::metrics::distribution(
-                            "exam_service.moderation_score",
-                            moderation_score,
-                        )
-                        .attribute("version", "v1_pre_bc6af64")
-                        .capture();
-                    }
-                    Err(e) => {
-                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate legacy moderation score");
-                    }
+                    scores.insert(version.id, result);
                 }
 
-                match current_result {
-                    Ok(moderation_score) => {
-                        sentry::metrics::distribution(
-                            "exam_service.moderation_score",
-                            moderation_score,
-                        )
-                        .attribute("version", "current")
-                        .capture();
+                let live_result = scores
+                    .remove(&moderation_versions::LIVE)
+                    .context("live moderation-score version must be registered")?;
 
+                match live_result {
+                    Ok(moderation_score) => {
                         exam_moderation.moderation_score = Some(moderation_score);
                         if moderation_score < env_vars.moderation_threshold {
                             num_attempts_below_moderation_threshold += 1;
@@ -204,9 +191,8 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                             num_attempts_above_moderation_threshold += 1;
                         }
                     }
-                    Err(e) => {
+                    Err(_) => {
                         num_score_errors += 1;
-                        tracing::error!(attempt = %attempt.id, error = %e, "unable to calculate moderation score");
                         exam_moderation.feedback =
                             Some(format!("Moderation score calculation error."));
                     }

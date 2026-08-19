@@ -1,24 +1,59 @@
 name: Publish JS API
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to publish
+        required: true
+        type: string
+      expected_version:
+        description: Version created by release-please
+        required: true
+        type: string
+      dry_run:
+        description: Build and pack without publishing
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
-  push:
-    tags:
-      - "js-api-v*"
+    inputs:
+      ref:
+        description: Git ref to build
+        required: true
+        default: main
+        type: string
+      expected_version:
+        description: Expected package version (optional for a dry run)
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Build and pack without publishing
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
-  # npm provenance
+  # npm trusted publishing and package provenance
   id-token: write
+
+concurrency:
+  group: publish-js-api-${{ inputs.expected_version || inputs.ref }}
+  cancel-in-progress: false
 
 jobs:
   publish:
-    name: Build and Publish
+    name: Build, Verify, and Publish
     runs-on: ubuntu-24.04
+    environment: npm
 
     steps:
-      - name: Checkout source code
+      - name: Checkout release commit
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -26,7 +61,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: js-api
 
@@ -35,9 +70,12 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
-      - name: Install wasm-pack
-        run: npm install -g wasm-pack
+      - name: Install release tools
+        run: |
+          npm install --global npm@12.0.2
+          npm install --global wasm-pack@0.15.0 --allow-scripts=wasm-pack
 
       - name: Build package
         run: node js-api/build.mjs
@@ -45,17 +83,32 @@ jobs:
       - name: Smoke test
         run: node js-api/smoke-test.mjs
 
-      - name: Check tag matches Cargo.toml version
-        if: github.ref_type == 'tag'
+      - name: Verify package version
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: |
-          VERSION=$(grep -m1 '^version = ' js-api/Cargo.toml | cut -d'"' -f2)
-          if [ "${GITHUB_REF_NAME}" != "js-api-v${VERSION}" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match js-api/Cargo.toml version ${VERSION}"
+          PACKAGE_VERSION=$(node -p "require('./js-api/pkg/package.json').version")
+          CARGO_VERSION=$(node -e "const fs=require('fs'); const m=fs.readFileSync('js-api/Cargo.toml','utf8').match(/^version = \"([^\"]+)\"$/m); if (!m) process.exit(1); process.stdout.write(m[1])")
+
+          if [ "$PACKAGE_VERSION" != "$CARGO_VERSION" ]; then
+            echo "built package version $PACKAGE_VERSION does not match js-api/Cargo.toml version $CARGO_VERSION"
             exit 1
           fi
 
+          if [ -n "$EXPECTED_VERSION" ] && [ "$PACKAGE_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "built package version $PACKAGE_VERSION does not match release version $EXPECTED_VERSION"
+            exit 1
+          fi
+
+      - name: Inspect package contents
+        working-directory: js-api/pkg
+        run: npm pack --dry-run
+
       - name: Publish to npm
+        if: inputs.dry_run == false
         working-directory: js-api/pkg
         run: npm publish --access public --provenance
         env:
+          # Optional bootstrap/fallback token. npm prefers OIDC when trusted
+          # publishing is configured for this workflow.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

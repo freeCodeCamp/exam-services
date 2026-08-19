@@ -5,6 +5,7 @@ edition = "2024"
 description = "WASM bindings for the freeCodeCamp exam-services utilities"
 license = "BSD-3-Clause"
 repository = "https://github.com/freeCodeCamp/exam-services"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
@@ -19,9 +20,10 @@ serde-wasm-bindgen = "0.6.5"
 wasm-bindgen = "0.2.106"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# rand/bson source randomness through getrandom; the `wasm_js` backend must
-# also be selected via rustflags — see /.cargo/config.toml
+# rand/bson source randomness through different getrandom major versions; each
+# must enable `wasm_js`. Backend selection also uses /.cargo/config.toml.
 getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [profile.release]
 opt-level = "s"

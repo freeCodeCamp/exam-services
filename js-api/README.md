@@ -108,7 +108,6 @@ node js-api/smoke-test.mjs # runs pkg/node against fixtures/
 
 ## Releasing
 
-1. Bump `version` in `js-api/Cargo.toml` and add a `js-api/CHANGELOG.md` entry
-2. Commit, then tag and push: `git tag js-api-v<version> && git push origin js-api-v<version>`
+Use Conventional Commits for changes under `js-api/`. Release Please updates version and changelog in its release PR. Merging that PR creates `js-api-v<version>` GitHub Release, then [`publish-js-api.yml`](https://github.com/freeCodeCamp/exam-services/blob/main/.github/workflows/publish-js-api.yml) builds, smoke-tests, and publishes to npm through trusted publishing with provenance. Manual workflow runs default to dry-run.
 
-The [`publish-js-api`](https://github.com/freeCodeCamp/exam-services/blob/main/.github/workflows/publish-js-api.yml) workflow builds, smoke-tests, and publishes to npm. It can also be run manually via `workflow_dispatch`. Requires the `NPM_TOKEN` repository secret.
+See repository [release setup](../README.md#repository-setup) for npm trusted-publisher and first-publication configuration.

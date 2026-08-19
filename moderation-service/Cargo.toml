@@ -2,6 +2,7 @@
 name = "moderation-service"
 version = "3.3.1"
 edition = "2024"
+publish = false
 
 [dependencies]
 anyhow = "1.0.104"

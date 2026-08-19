@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Keep one release-please run active so concurrent pushes cannot race the release PR.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Prepare or Create Releases
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      js-api-released: ${{ steps.release.outputs['js-api--release_created'] }}
+      js-api-sha: ${{ steps.release.outputs['js-api--sha'] }}
+      js-api-version: ${{ steps.release.outputs['js-api--version'] }}
+      moderation-service-released: ${{ steps.release.outputs['moderation-service--release_created'] }}
+      moderation-service-sha: ${{ steps.release.outputs['moderation-service--sha'] }}
+      moderation-service-version: ${{ steps.release.outputs['moderation-service--version'] }}
+
+    steps:
+      - name: Run release-please
+        id: release
+        # v5.0.0
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  publish-js-api:
+    name: Publish JS API
+    needs: release
+    if: needs.release.outputs.js-api-released == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-js-api.yml
+    with:
+      ref: ${{ needs.release.outputs.js-api-sha }}
+      expected_version: ${{ needs.release.outputs.js-api-version }}
+      dry_run: false
+    secrets: inherit
+
+  deploy-moderation-service:
+    name: Deploy Moderation Service
+    needs: release
+    if: needs.release.outputs.moderation-service-released == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy.yaml
+    with:
+      ref: ${{ needs.release.outputs.moderation-service-sha }}
+      image_tag: ${{ needs.release.outputs.moderation-service-version }}
+    secrets: inherit

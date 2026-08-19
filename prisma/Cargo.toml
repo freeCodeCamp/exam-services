@@ -2,6 +2,7 @@
 name = "prisma"
 version = "1.2.1"
 edition = "2024"
+publish = false
 
 [dependencies]
 bson = { version = "3.1.0", features = ["serde"] }

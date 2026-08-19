@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "801cfc7ba2c868db5f310c4b91173548e2dcd09f",
+  "plugins": ["cargo-workspace"],
+  "always-update": true,
+  "include-component-in-tag": true,
+  "include-v-in-tag": true,
+  "group-pull-request-title-pattern": "chore: release packages",
+  "packages": {
+    "exam-utils": {
+      "release-type": "rust",
+      "component": "exam-utils"
+    },
+    "js-api": {
+      "release-type": "rust",
+      "component": "js-api"
+    },
+    "moderation-service": {
+      "release-type": "rust",
+      "component": "moderation-service"
+    },
+    "prisma": {
+      "release-type": "rust",
+      "component": "prisma"
+    },
+    "script": {
+      "release-type": "rust",
+      "component": "script"
+    }
+  }
+}

@@ -6,14 +6,26 @@
 - `prisma/`: prisma schema Rust export
 - `script/`: assortment of past, once-off scripts interacting with the database
 
-## Deployment
+## Releases and deployment
 
-This project is deployed on the Digital Ocean App Platform as a Job on a schedule. The image is built using GitHub Actions, pushed to the Digital Ocean Container Registry, then the App Platform auto-deploys the new image.
+[Release Please](https://github.com/googleapis/release-please) manages independent versions, changelogs, tags, and GitHub Releases for every Rust crate in this repository. Commits must use [Conventional Commits](https://www.conventionalcommits.org/): `fix` produces a patch, `feat` a minor, and `!`/`BREAKING CHANGE` a major release.
 
-To deploy:
+On each push to `main`, [`release.yml`](./.github/workflows/release.yml) opens or updates one release PR containing all affected packages. Merging that PR creates component tags such as `exam-utils-v3.2.0` and published GitHub Releases. Cargo workspace dependants and the root lockfile are updated together. Rust packages are not published to crates.io: this repository contains services/internal tools and its schema dependency chain includes unpublished Git dependencies.
 
-1. manually bump the version(s) of the changed package(s)
-2. run the `deploy.yaml` to build and push to DOCR
+Release side effects run from the exact tagged commit:
+
+- `js-api` builds, smoke-tests, and publishes `@freecodecamp/exam-services` to npm with provenance
+- `moderation-service` builds and pushes `<version>` and `latest` images to DOCR; DigitalOcean App Platform then auto-deploys the image
+
+`deploy.yaml` and `publish-js-api.yml` remain manually runnable. Manual npm runs default to dry-run.
+
+### Repository setup
+
+1. In GitHub Actions settings, allow workflows read/write access and creation of pull requests.
+2. Recommended: add `RELEASE_PLEASE_TOKEN` as a fine-grained PAT or GitHub App token with repository contents and pull-request write access. Automation falls back to `GITHUB_TOKEN`, but token-created release PRs do not trigger other workflows.
+3. Create GitHub environment `npm`. Configure npm trusted publishing for package `@freecodecamp/exam-services` with organization `freeCodeCamp`, repository `exam-services`, workflow `publish-js-api.yml`, environment `npm`, and `npm publish` permission.
+4. npm trusted publishing can only be configured after package exists. For first publication, add granular automation token `NPM_TOKEN` to `npm` environment and manually run `Publish JS API` with dry-run disabled. Configure trusted publishing afterward; then remove token.
+5. Keep `DIGITALOCEAN_ACCESS_TOKEN` and `DOCR_NAME` repository secrets configured for moderation-service deployment.
 
 ## Moderation Service
 
@@ -81,10 +93,7 @@ node js-api/smoke-test.mjs # runs the package against fixtures/ (when present)
 
 ### Releasing
 
-1. bump `version` in `js-api/Cargo.toml` and update `js-api/CHANGELOG.md`
-2. commit, then tag and push: `git tag js-api-v<version> && git push origin js-api-v<version>`
-
-The `publish-js-api.yml` workflow (also runnable via `workflow_dispatch`) builds, smoke-tests, and publishes to npm with provenance. Requires the `NPM_TOKEN` repository secret.
+Merge conventional commits that change `js-api/`. Release Please updates `js-api/Cargo.toml`, `js-api/Cargo.lock`, and `js-api/CHANGELOG.md`; merging its release PR creates the GitHub Release and publishes npm package. See [Releases and deployment](#releases-and-deployment).
 
 ## Script
 

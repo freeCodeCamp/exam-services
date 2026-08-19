@@ -1,0 +1,7 @@
+{
+  "exam-utils": "3.1.0",
+  "js-api": "0.2.0",
+  "moderation-service": "3.3.1",
+  "prisma": "1.2.1",
+  "script": "1.1.0"
+}

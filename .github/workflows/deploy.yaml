@@ -1,7 +1,37 @@
 name: Image Build and Deploy
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to deploy
+        required: true
+        type: string
+      image_tag:
+        description: Container tag (normally release version)
+        required: false
+        default: ""
+        type: string
+    secrets:
+      DIGITALOCEAN_ACCESS_TOKEN:
+        required: true
+      DOCR_NAME:
+        required: true
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy
+        required: true
+        default: main
+        type: string
+      image_tag:
+        description: Container tag (generated when omitted)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,13 +46,19 @@ jobs:
     steps:
       - name: Checkout source code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
-      - name: Create a tagname
-        id: tagname
+      - name: Create image tag
+        env:
+          RELEASE_TAG: ${{ inputs.image_tag }}
         run: |
-          TAGNAME="$(git rev-parse --short HEAD)-$(date +%Y%m%d)-$(date +%H%M)"
-          echo "tagname=$TAGNAME" >> $GITHUB_ENV
-          echo "{tag}={$TAGNAME}" >> $GITHUB_OUTPUT
+          if [ -n "$RELEASE_TAG" ]; then
+            TAGNAME="$RELEASE_TAG"
+          else
+            TAGNAME="$(git rev-parse --short HEAD)-$(date -u +%Y%m%d-%H%M)"
+          fi
+          echo "tagname=$TAGNAME" >> "$GITHUB_ENV"
 
       - name: Install doctl
         uses: digitalocean/action-doctl@v2.5.2
@@ -32,8 +68,7 @@ jobs:
       - name: Log in to DigitalOcean Container Registry with short-lived credentials
         run: doctl registry login --expiry-seconds 1200
 
-      - name: Build & Tag Image
-        # Currently, only the moderation-service is enabled
+      - name: Build and tag image
         run: |
           docker build . \
             --tag registry.digitalocean.com/${{ secrets.DOCR_NAME }}/${{ matrix.site_tlds }}/moderation-service:${{ env.tagname }} \

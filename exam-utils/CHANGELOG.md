@@ -1,5 +1,12 @@
 # Exam Services - Exam Utils Changelog
 
+## [3.2.0](https://github.com/freeCodeCamp/exam-services/compare/exam-utils-v3.1.0...exam-utils-v3.2.0) (2026-09-14)
+
+
+### Features
+
+* add moderation score test harness and reporting ([9161b2d](https://github.com/freeCodeCamp/exam-services/commit/9161b2d4c0ad3de3d200b6d244370664d32f3235))
+
 ## [3.1.0]
 
 - rewrite `get_moderation_score`: time-taken and median-time-per-question weighting, blur periods tracked per-question instead of as running totals

@@ -1,5 +1,17 @@
 # Exam Services - Moderation Service Changelog
 
+## [3.4.0](https://github.com/freeCodeCamp/exam-services/compare/moderation-service-v3.3.1...moderation-service-v3.4.0) (2026-09-14)
+
+
+### Features
+
+* add moderation score test harness and reporting ([9161b2d](https://github.com/freeCodeCamp/exam-services/commit/9161b2d4c0ad3de3d200b6d244370664d32f3235))
+
+
+### Bug Fixes
+
+* **moderation-service:** continue on supabase error ([5a89e88](https://github.com/freeCodeCamp/exam-services/commit/5a89e88fb81b22680ef521d891fbe05a63b53529))
+
 ## [3.3.1]
 
 - remove `challenges_awarded = true` from moderation score calculation

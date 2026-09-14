@@ -73,6 +73,7 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     let mut num_attempts_below_moderation_threshold = 0;
     let mut num_attempts_above_moderation_threshold = 0;
     let mut num_score_errors = 0;
+    let mut num_attempts_event_fetch_failed = 0;
 
     while let Some(attempt) = attempts_cursor.next().await {
         let attempt = attempt.context("unable to deserialize attempt to collection")?;
@@ -141,7 +142,20 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
                 exam_moderation.challenges_awarded = true;
             } else {
                 num_attempts_passed += 1;
-                let events = get_events_for_attempt(&supabase, &attempt.id).await?;
+                let events = match get_events_for_attempt(&supabase, &attempt.id).await {
+                    Ok(events) => events,
+                    Err(e) => {
+                        // Skip this attempt without creating a moderation record. The attempt
+                        // keeps a null `examModerationId`, so the next cron run picks it up again.
+                        num_attempts_event_fetch_failed += 1;
+                        tracing::error!(
+                            attempt_id = %attempt.id,
+                            error = ?e,
+                            "unable to get events for attempt - skipping attempt until next run"
+                        );
+                        continue;
+                    }
+                };
 
                 let attempt = construct_attempt(&exam, &generated_exam, &attempt);
 
@@ -243,33 +257,112 @@ pub async fn update_moderation_collection(env_vars: &EnvVars) -> anyhow::Result<
     )
     .capture();
     sentry::metrics::counter("exam_service.score_errors", num_score_errors).capture();
+    sentry::metrics::counter(
+        "exam_service.attempts_event_fetch_failed",
+        num_attempts_event_fetch_failed,
+    )
+    .capture();
 
     Ok(())
 }
 
-#[tracing::instrument(skip_all, err(Debug))]
+/// Records the outcome of a single Supabase request as metrics, so failures can be
+/// attributed to the exact table and operation - not just the error message.
+fn record_supabase_request(
+    table: &'static str,
+    operation: &'static str,
+    elapsed_ms: f64,
+    ok: bool,
+) {
+    sentry::metrics::distribution("exam_service.supabase_request_duration", elapsed_ms)
+        .unit(sentry::protocol::Unit::Millisecond)
+        .attribute("table", table)
+        .attribute("operation", operation)
+        .capture();
+    if !ok {
+        sentry::metrics::counter("exam_service.supabase_request_failed", 1)
+            .attribute("table", table)
+            .attribute("operation", operation)
+            .capture();
+    }
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        supabase.table = "events",
+        supabase.operation = "select",
+        supabase.filter = %format!("attempt_id=eq.{}", attempt_id.to_hex()),
+    ),
+    err(Debug)
+)]
 async fn get_events_for_attempt(
     supabase: &SupabaseClient,
     attempt_id: &ObjectId,
 ) -> anyhow::Result<Vec<Event>> {
-    let events = supabase
-        .from("events")
-        .eq("attempt_id", &attempt_id.to_hex())
-        .execute()
-        .await
-        .map_err(anyhow::Error::msg)
-        .context("unable to get examts for attempt")?;
+    let attempt_id = attempt_id.to_hex();
+    let query = format!("select events where attempt_id=eq.{attempt_id}");
 
-    let events: Vec<Event> = events
+    let start = std::time::Instant::now();
+    let result = supabase
+        .from("events")
+        .eq("attempt_id", &attempt_id)
+        .execute()
+        .await;
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    record_supabase_request("events", "select", elapsed_ms, result.is_ok());
+
+    let rows = match result {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(
+                supabase.query = %query,
+                attempt_id = %attempt_id,
+                duration_ms = elapsed_ms,
+                error = %e,
+                "supabase query failed"
+            );
+            return Err(anyhow::Error::msg(e).context(format!("supabase query failed: {query}")));
+        }
+    };
+
+    let num_rows = rows.len();
+    let mut num_deserialize_errors = 0;
+    let events: Vec<Event> = rows
         .into_iter()
         .filter_map(|event| match serde_json::from_value(event) {
             Ok(event) => Some(event),
             Err(e) => {
-                tracing::warn!(error = ?e, "unable to deserialize event");
+                num_deserialize_errors += 1;
+                tracing::warn!(
+                    supabase.query = %query,
+                    attempt_id = %attempt_id,
+                    error = ?e,
+                    "unable to deserialize event"
+                );
                 None
             }
         })
         .collect();
+
+    if num_deserialize_errors > 0 {
+        sentry::metrics::counter(
+            "exam_service.supabase_row_deserialize_errors",
+            num_deserialize_errors as f64,
+        )
+        .attribute("table", "events")
+        .capture();
+    }
+
+    tracing::debug!(
+        supabase.query = %query,
+        attempt_id = %attempt_id,
+        duration_ms = elapsed_ms,
+        num_rows,
+        num_events = events.len(),
+        "supabase query succeeded"
+    );
+
     Ok(events)
 }
 
@@ -527,7 +620,15 @@ pub async fn delete_practice_exam_attempts(env_vars: &EnvVars) -> anyhow::Result
 }
 
 /// Delete Supabase events older than 30 days
-#[tracing::instrument(skip_all, err(Debug))]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        supabase.table = "events",
+        supabase.operation = "delete",
+        supabase.filter = tracing::field::Empty,
+    ),
+    err(Debug)
+)]
 pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
     let supabase_url = &env_vars.supabase_url;
     let supabase_key = &env_vars.supabase_key;
@@ -537,25 +638,59 @@ pub async fn delete_supabase_events(env_vars: &EnvVars) -> anyhow::Result<()> {
         .insert_header("Prefer", "return=representation");
 
     let expiry_date = chrono::Utc::now() - chrono::Duration::days(30);
+    let query = format!(
+        "delete events where timestamp=lt.{}",
+        expiry_date.to_rfc3339()
+    );
+    tracing::Span::current().record("supabase.filter", tracing::field::display(&query));
 
-    let res = client
+    let start = std::time::Instant::now();
+    let result = client
         .from("events")
         .lt("timestamp", &expiry_date.to_rfc3339())
         .delete()
         .execute()
-        .await?
-        .error_for_status()?;
+        .await;
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    let text = res.text().await?;
+    let res = match result.and_then(|res| res.error_for_status()) {
+        Ok(res) => {
+            record_supabase_request("events", "delete", elapsed_ms, true);
+            res
+        }
+        Err(e) => {
+            record_supabase_request("events", "delete", elapsed_ms, false);
+            let status = e.status().map(|s| s.as_u16());
+            tracing::error!(
+                supabase.query = %query,
+                duration_ms = elapsed_ms,
+                status = ?status,
+                error = %e,
+                "supabase query failed"
+            );
+            return Err(anyhow::Error::new(e).context(format!("supabase query failed: {query}")));
+        }
+    };
+
+    let text = res
+        .text()
+        .await
+        .context(format!("unable to read response body for: {query}"))?;
     let json: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
     match json {
         Ok(v) => {
             sentry::metrics::counter("exam_service.supabase_events_deleted", v.len() as f64)
                 .capture();
+            tracing::debug!(
+                supabase.query = %query,
+                duration_ms = elapsed_ms,
+                num_rows = v.len(),
+                "supabase query succeeded"
+            );
         }
         Err(e) => {
             sentry::metrics::counter("exam_service.supabase_events_parse_errors", 1).capture();
-            tracing::warn!(error = %e, text, "unable to serialize response as json array");
+            tracing::warn!(supabase.query = %query, error = %e, text, "unable to serialize response as json array");
         }
     };
 

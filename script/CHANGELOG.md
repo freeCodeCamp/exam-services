@@ -4,6 +4,13 @@ Contains changes, as well as a record of bugs and log of runs for the one-off sc
 
 See `README.md` for the process to follow when adding and running a script.
 
+## [1.2.0](https://github.com/freeCodeCamp/exam-services/compare/script-v1.1.0...script-v1.2.0) (2026-09-14)
+
+
+### Features
+
+* add moderation score test harness and reporting ([9161b2d](https://github.com/freeCodeCamp/exam-services/commit/9161b2d4c0ad3de3d200b6d244370664d32f3235))
+
 ## [1.1.0]
 
 - add `README.md`: conventions and flight manual for adding/running a fix script

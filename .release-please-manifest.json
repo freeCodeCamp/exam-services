@@ -3,5 +3,5 @@
   "js-api": "0.2.0",
   "moderation-service": "3.4.0",
   "prisma": "1.2.1",
-  "script": "1.1.0"
+  "script": "1.2.0"
 }

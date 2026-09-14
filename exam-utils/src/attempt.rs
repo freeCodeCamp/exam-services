@@ -564,8 +564,25 @@ mod tests {
         events
     }
 
-    fn get_attempts() -> Vec<ExamEnvironmentExamAttempt> {
-        let attempts_dir = std::fs::read_dir("../fixtures/attempt").unwrap();
+    /// `../fixtures` holds dumped production records, which may contain PII. It is
+    /// gitignored and never present in CI, so fixture-backed tests must skip rather
+    /// than fail when it is absent. Populate locally via
+    /// `cargo run --bin dump_moderation_fixtures` in `../script`.
+    fn fixture_exists(dir: &str, id: &ObjectId) -> bool {
+        std::path::Path::new(&format!("../fixtures/{dir}/{}", id.to_hex())).exists()
+    }
+
+    /// `None` when the fixture dump is absent - see [`fixture_exists`].
+    fn get_attempts() -> Option<Vec<ExamEnvironmentExamAttempt>> {
+        let attempts_dir = match std::fs::read_dir("../fixtures/attempt") {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!(
+                    "no ../fixtures/attempt ({e}). Run: cargo run --bin dump_moderation_fixtures"
+                );
+                return None;
+            }
+        };
 
         let mut attempts = vec![];
         for f in attempts_dir {
@@ -574,7 +591,7 @@ mod tests {
             attempts.push(attempt);
         }
 
-        attempts
+        Some(attempts)
     }
 
     fn get_exam_by_id(exam_id: &ObjectId) -> ExamEnvironmentExam {
@@ -594,12 +611,24 @@ mod tests {
 
     #[test]
     fn moderation_score() {
-        let attempts = get_attempts();
+        let Some(attempts) = get_attempts() else {
+            return;
+        };
 
         let mut scores = vec![];
         let mut min = f64::MAX;
         let mut max = f64::MIN;
+        let mut missing_fixtures = 0usize;
         for attempt in attempts {
+            // Fixtures for exam/generation/events may be absent for stale records.
+            if !fixture_exists("exam", &attempt.exam_id)
+                || !fixture_exists("generation", &attempt.generated_exam_id)
+                || !fixture_exists("events", &attempt.id)
+            {
+                missing_fixtures += 1;
+                continue;
+            }
+
             let exam = get_exam_by_id(&attempt.exam_id);
             let generation = get_generation_by_id(&attempt.generated_exam_id);
             let events = get_events_for_attempt(&attempt.id);
@@ -626,7 +655,12 @@ mod tests {
             scores.push(format!("{:.3}", score));
         }
 
-        dbg!(min, max);
+        dbg!(min, max, missing_fixtures);
+
+        if scores.is_empty() {
+            eprintln!("no scorable attempt fixtures ({missing_fixtures} incomplete) - skipping");
+            return;
+        }
 
         assert!(max <= 1.0);
         assert!(min >= 0.0);
@@ -714,12 +748,9 @@ mod tests {
 
             let attempt = get_attempt_by_id(&attempt_id);
             // Fixtures for exam/generation/events may be absent for stale records.
-            let exists = |dir: &str, id: &ObjectId| {
-                std::path::Path::new(&format!("../fixtures/{dir}/{}", id.to_hex())).exists()
-            };
-            if !exists("exam", &attempt.exam_id)
-                || !exists("generation", &attempt.generated_exam_id)
-                || !exists("events", &attempt.id)
+            if !fixture_exists("exam", &attempt.exam_id)
+                || !fixture_exists("generation", &attempt.generated_exam_id)
+                || !fixture_exists("events", &attempt.id)
             {
                 missing_fixtures += 1;
                 continue;

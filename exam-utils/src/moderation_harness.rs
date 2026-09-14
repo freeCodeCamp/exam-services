@@ -30,9 +30,7 @@ use prisma::{
 };
 use serde::Deserialize;
 
-use crate::attempt::{
-    Attempt, AttemptQuestionSet, AttemptQuestionSetQuestion, construct_attempt,
-};
+use crate::attempt::{Attempt, AttemptQuestionSet, AttemptQuestionSetQuestion, construct_attempt};
 use crate::moderation_versions::{LIVE, VERSIONS};
 
 /// Fixed epoch offset - keeps timestamps clear of the Unix epoch so nothing
@@ -44,8 +42,14 @@ const T0: i64 = 1_700_000_000_000;
 const THRESHOLD: f64 = 0.25;
 
 const SCENARIOS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/moderation/scenarios");
-const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/moderation/scores.golden");
-const REPORT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/moderation/report.html");
+const GOLDEN_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/testdata/moderation/scores.golden"
+);
+const REPORT_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/testdata/moderation/report.html"
+);
 /// Workspace-root `fixtures/` (optional local enrichment; git-ignored).
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures");
 
@@ -187,8 +191,8 @@ fn score_all(attempt: &Attempt, events: &Vec<Event>) -> Vec<Result<f64, String>>
 }
 
 fn load_scenarios() -> Vec<Scenario> {
-    let dir = std::fs::read_dir(SCENARIOS_DIR)
-        .unwrap_or_else(|e| panic!("read {SCENARIOS_DIR}: {e}"));
+    let dir =
+        std::fs::read_dir(SCENARIOS_DIR).unwrap_or_else(|e| panic!("read {SCENARIOS_DIR}: {e}"));
     let mut out = vec![];
     for entry in dir {
         let path = entry.unwrap().path();
@@ -315,9 +319,7 @@ fn cell_text(cell: &Result<f64, String>) -> String {
 fn golden_text(cases: &[Case]) -> String {
     let mut s = String::new();
     s.push_str("# Moderation-score golden - DO NOT hand-edit.\n");
-    s.push_str(
-        "# Regenerate: UPDATE_GOLDEN=1 cargo test -p exam-utils moderation_scores_golden\n",
-    );
+    s.push_str("# Regenerate: UPDATE_GOLDEN=1 cargo test -p exam-utils moderation_scores_golden\n");
     s.push_str("# Format: <scenario> | <version> | <score|ERR:msg>\n");
     for case in cases {
         for (version, cell) in VERSIONS.iter().zip(&case.cells) {
@@ -339,7 +341,10 @@ fn golden_diff(expected: &str, actual: &str) -> String {
     let parse = |s: &str| -> BTreeMap<String, String> {
         s.lines()
             .filter(|l| !l.starts_with('#'))
-            .filter_map(|l| l.rsplit_once(" | ").map(|(k, v)| (k.trim().into(), v.trim().into())))
+            .filter_map(|l| {
+                l.rsplit_once(" | ")
+                    .map(|(k, v)| (k.trim().into(), v.trim().into()))
+            })
             .collect()
     };
     let (e, a) = (parse(expected), parse(actual));
@@ -409,7 +414,10 @@ fn render_row(case: &Case, with_desc: bool) -> String {
     let mut tds = String::new();
     tds.push_str(&format!("<td class=\"name\">{}</td>", esc(&case.name)));
     if with_desc {
-        tds.push_str(&format!("<td class=\"desc\">{}</td>", esc(&case.description)));
+        tds.push_str(&format!(
+            "<td class=\"desc\">{}</td>",
+            esc(&case.description)
+        ));
     }
     for cell in &case.cells {
         match cell {
@@ -504,8 +512,14 @@ fn render_summary(cases: &[Case]) -> String {
     }
 
     // Crossings between the oldest and the live version.
-    let now_flagged = cases.iter().filter(|c| crossing(c) == Some("NOW-FLAGGED")).count();
-    let now_cleared = cases.iter().filter(|c| crossing(c) == Some("NOW-CLEARED")).count();
+    let now_flagged = cases
+        .iter()
+        .filter(|c| crossing(c) == Some("NOW-FLAGGED"))
+        .count();
+    let now_cleared = cases
+        .iter()
+        .filter(|c| crossing(c) == Some("NOW-CLEARED"))
+        .count();
     let deltas: Vec<f64> = cases
         .iter()
         .filter_map(|c| match (oldest_score(c), live_score(c)) {

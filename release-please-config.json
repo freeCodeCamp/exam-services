@@ -5,7 +5,7 @@
   "always-update": true,
   "include-component-in-tag": true,
   "include-v-in-tag": true,
-  "group-pull-request-title-pattern": "chore: release packages",
+  "group-pull-request-title-pattern": "chore: release packages ${branch}",
   "packages": {
     "exam-utils": {
       "release-type": "rust",

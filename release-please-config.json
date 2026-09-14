@@ -12,8 +12,15 @@
       "component": "exam-utils"
     },
     "js-api": {
-      "release-type": "rust",
-      "component": "js-api"
+      "release-type": "simple",
+      "component": "js-api",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "Cargo.toml",
+          "jsonpath": "$.package.version"
+        }
+      ]
     },
     "moderation-service": {
       "release-type": "rust",
@@ -24,8 +31,15 @@
       "component": "prisma"
     },
     "script": {
-      "release-type": "rust",
-      "component": "script"
+      "release-type": "simple",
+      "component": "script",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "Cargo.toml",
+          "jsonpath": "$.package.version"
+        }
+      ]
     }
   }
 }
